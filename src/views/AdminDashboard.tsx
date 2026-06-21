@@ -23,15 +23,30 @@ const AdminDashboard: React.FC = () => {
     const [actionLoading, setActionLoading] = useState(false);
     const navigate = useNavigate();
 
+    const getAuthHeaders = (): HeadersInit => {
+        const token = sessionStorage.getItem('laa_admin_token');
+        return token ? { Authorization: `Bearer ${token}` } : {};
+    };
+
+    const handleSessionExpired = () => {
+        sessionStorage.removeItem('laa_admin_token');
+        navigate('/admin/login', { replace: true });
+    };
+
     useEffect(() => {
         const fetchAdminData = async () => {
             try {
                 // Fetching from Render instead of localhost/Vercel
                 const [turnoutRes, tallyRes, statusRes] = await Promise.all([
                     fetch(`${BACKEND_URL}/api/results/turnout`),
-                    fetch(`${BACKEND_URL}/api/admin/tally`),
-                    fetch(`${BACKEND_URL}/api/admin/status`)
+                    fetch(`${BACKEND_URL}/api/admin/tally`, { headers: getAuthHeaders() }),
+                    fetch(`${BACKEND_URL}/api/admin/status`, { headers: getAuthHeaders() })
                 ]);
+
+                if (tallyRes.status === 401 || statusRes.status === 401) {
+                    handleSessionExpired();
+                    return;
+                }
 
                 if (turnoutRes.ok && tallyRes.ok && statusRes.ok) {
                     const turnoutJson = await turnoutRes.json();
@@ -72,9 +87,15 @@ const AdminDashboard: React.FC = () => {
         try {
             const res = await fetch(`${BACKEND_URL}/api/admin/status`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
                 body: JSON.stringify({ election_open: !isElectionOpen })
             });
+
+            if (res.status === 401) {
+                handleSessionExpired();
+                return;
+            }
+
             const data = await res.json();
             if (data.status === 'success') setIsElectionOpen(data.election_open);
         } catch (error) {
@@ -82,6 +103,11 @@ const AdminDashboard: React.FC = () => {
         } finally {
             setActionLoading(false);
         }
+    };
+
+    const handleExit = () => {
+        sessionStorage.removeItem('laa_admin_token');
+        navigate('/login');
     };
 
     const downloadCSV = () => {
@@ -122,7 +148,7 @@ const AdminDashboard: React.FC = () => {
                     <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight uppercase">Election Control Center</h1>
                 </div>
                 <button
-                    onClick={() => navigate('/login')}
+                    onClick={handleExit}
                     className="text-sm font-bold text-blue-600 hover:text-blue-800 transition-colors uppercase tracking-wider"
                 >
                     Exit Dashboard

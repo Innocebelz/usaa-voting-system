@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import AdminDashboard from './views/AdminDashboard';
+import AdminLogin from './views/AdminLogin';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import Layout from './components/Layout';
-import { ProtectedRoute, GuestRoute, VotingRoute } from './components/ProtectedRoute';
+import { ProtectedRoute, GuestRoute, VotingRoute, AdminRoute } from './components/ProtectedRoute';
 
 import Login from './views/Login';
 import Verify from './views/Verify';
@@ -36,8 +37,13 @@ export default function App() {
                 <Route path="/results" element={<Results />} />
               </Route>
 
-              {/* Admin Route - Election Control Center */}
-              <Route path="/admin" element={<AdminDashboard />} />
+              {/* Admin Login - public, but separate from the voter login */}
+              <Route path="/admin/login" element={<AdminLogin />} />
+
+              {/* Admin Route - Election Control Center, requires an admin session */}
+              <Route element={<AdminRoute />}>
+                <Route path="/admin" element={<AdminDashboard />} />
+              </Route>
 
               {/* Fallback to login */}
               <Route path="*" element={<Navigate to="/login" replace />} />

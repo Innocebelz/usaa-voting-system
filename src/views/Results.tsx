@@ -73,7 +73,7 @@ const Results: React.FC = () => {
             <div>
               <h3 className="text-sm font-bold text-green-800 uppercase tracking-wide">Vote Recorded</h3>
               <p className="text-xs text-green-700 mt-1 font-medium">
-                Thank you for participating. Your vote has been securely anonymized and recorded in the ledger.
+                Thank you for participating. Your vote has been securely recorded.
               </p>
             </div>
           </div>
@@ -152,7 +152,7 @@ const Results: React.FC = () => {
               <ShieldCheck className="w-5 h-5 text-white" />
             </div>
             <p className="text-[10px] text-blue-900 leading-tight font-bold uppercase">
-              Encrypted End-to-End <br/> SHA-256 Integrity Validated
+              Submitted Over a Secure <br/> HTTPS Connection
             </p>
           </div>
           <div className="mt-4 text-center text-[10px] text-slate-400 uppercase font-bold tracking-wider">

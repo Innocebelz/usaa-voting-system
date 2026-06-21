@@ -5,11 +5,12 @@ import { useAuth } from '../context/AuthContext';
 const Verify: React.FC = () => {
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
   const [error, setError] = useState('');
   const [countdown, setCountdown] = useState(60);
 
   // Destructure maskedEmail from the updated AuthContext
-  const { matNumber, verifyOtp, user, maskedEmail } = useAuth();
+  const { matNumber, verifyOtp, login, user, maskedEmail } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -46,9 +47,18 @@ const Verify: React.FC = () => {
     }
   };
 
-  const handleResend = () => {
-    if (countdown === 0) {
+  const handleResend = async () => {
+    if (countdown > 0 || resending || !matNumber) return;
+
+    try {
+      setError('');
+      setResending(true);
+      await login(matNumber);
       setCountdown(60);
+    } catch (err: any) {
+      setError(err.message || 'Failed to resend OTP. Please try again.');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -101,14 +111,14 @@ const Verify: React.FC = () => {
           <span className="text-slate-500">Did not receive the code? </span>
           <button
               onClick={handleResend}
-              disabled={countdown > 0}
+              disabled={countdown > 0 || resending}
               className={`font-bold uppercase text-xs tracking-wider ${
-                  countdown > 0
+                  countdown > 0 || resending
                       ? 'text-slate-300 cursor-not-allowed'
                       : 'text-blue-600 hover:text-blue-800'
               } transition-colors ml-1`}
           >
-            {countdown > 0 ? `WAIT ${countdown}S` : 'RESEND CODE'}
+            {resending ? 'SENDING...' : countdown > 0 ? `WAIT ${countdown}S` : 'RESEND CODE'}
           </button>
         </div>
       </div>

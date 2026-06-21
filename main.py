@@ -1,15 +1,20 @@
 import os
 import random
+import secrets
+import hmac
+import hashlib
+import base64
+import json
+import time
 import httpx
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, Optional
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 load_dotenv()
@@ -32,7 +37,110 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# ---------------------------------------------------------------------------
+# Auth — signed session tokens (HMAC-SHA256, stdlib only, no JWT library)
+#
+# Used for two things:
+#   1. Admin sessions  -> issued by POST /api/admin/login
+#   2. Vote sessions   -> issued by POST /api/verify-otp, required by
+#                          POST /api/vote so a ballot can only be cast after
+#                          OTP verification, not by guessing a matric number.
+# ---------------------------------------------------------------------------
+
+APP_SECRET_KEY = os.getenv("APP_SECRET_KEY")
+if not APP_SECRET_KEY:
+    # Falls back to a random key so the app still boots, but this means
+    # every restart invalidates existing sessions. Set APP_SECRET_KEY in
+    # your environment (Render dashboard + local .env) for real use.
+    APP_SECRET_KEY = secrets.token_hex(32)
+    print("[WARNING] APP_SECRET_KEY is not set. Using a temporary random key — "
+          "all admin/vote sessions will be invalidated on restart. "
+          "Set APP_SECRET_KEY in your environment for production.")
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+
+
+def _b64encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+def _b64decode(data: str) -> bytes:
+    padded = data + "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(padded)
+
+
+def _sign(payload_b64: str) -> str:
+    sig = hmac.new(APP_SECRET_KEY.encode(), payload_b64.encode(), hashlib.sha256).digest()
+    return _b64encode(sig)
+
+
+def create_token(data: dict, expires_in_seconds: int) -> str:
+    payload = {**data, "exp": int(time.time()) + expires_in_seconds}
+    payload_b64 = _b64encode(json.dumps(payload).encode())
+    return f"{payload_b64}.{_sign(payload_b64)}"
+
+
+def verify_token(token: str) -> Optional[dict]:
+    try:
+        payload_b64, signature = token.split(".", 1)
+        if not hmac.compare_digest(signature, _sign(payload_b64)):
+            return None
+        payload = json.loads(_b64decode(payload_b64))
+        if payload.get("exp", 0) < time.time():
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def _extract_bearer_token(authorization: Optional[str]) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or malformed Authorization header.")
+    return authorization[len("Bearer "):].strip()
+
+
+def require_admin(authorization: Optional[str] = Header(None)):
+    """FastAPI dependency: protects admin-only routes with a Bearer token."""
+    token = _extract_bearer_token(authorization)
+    payload = verify_token(token)
+    if not payload or payload.get("role") != "admin":
+        raise HTTPException(status_code=401, detail="Invalid or expired admin session. Please log in again.")
+    return payload
+
+
+def require_vote_session(matric_number: str, authorization: Optional[str] = Header(None)):
+    """FastAPI dependency: ensures /api/vote can only be called with a token
+    issued by a successful /api/verify-otp call for this exact voter."""
+    token = _extract_bearer_token(authorization)
+    payload = verify_token(token)
+    if not payload or payload.get("purpose") != "vote":
+        raise HTTPException(
+            status_code=401,
+            detail="Voting session is missing or expired. Please verify your OTP again."
+        )
+    if payload.get("matric_number") != matric_number:
+        raise HTTPException(
+            status_code=401,
+            detail="Voting session does not match this voter."
+        )
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting — in-memory, process-local. Good enough for a single-dyno
+# student election; resets on restart, which only makes limits looser, never
+# a security hole. Two things are limited:
+#   1. How often a matric_number can request a new OTP (stops inbox spam).
+#   2. How many wrong codes a matric_number can try before a code is burned
+#      (stops brute-forcing the 6-digit OTP within its 5-minute window).
+# ---------------------------------------------------------------------------
+
+OTP_RESEND_COOLDOWN_SECONDS = 55
+MAX_OTP_ATTEMPTS = 5
+
+_last_otp_request_at: Dict[str, float] = {}
+_otp_attempt_counts: Dict[str, int] = {}
+
 
 # ---------------------------------------------------------------------------
 # Database
@@ -130,6 +238,10 @@ class StatusUpdate(BaseModel):
     election_open: bool
 
 
+class AdminLoginRequest(BaseModel):
+    password: str
+
+
 # ---------------------------------------------------------------------------
 # Email — Brevo HTTP API (Render free tier blocks outbound SMTP entirely,
 # so we use Brevo's HTTPS API instead of smtplib)
@@ -159,13 +271,6 @@ def send_otp_email(receiver_email: str, otp_code: str):
     """Send OTP via Brevo's HTTP API (port 443). Raises HTTPException on failure."""
     api_key = os.getenv("BREVO_API_KEY")
     sender_email = os.getenv("BREVO_SENDER_EMAIL")
-
-    # TEMP DEBUG — remove after confirming the key loads correctly
-    if api_key:
-        print(f"[DEBUG] BREVO_API_KEY length={len(api_key)} starts='{api_key[:10]}' ends='{api_key[-6:]}'")
-    else:
-        print("[DEBUG] BREVO_API_KEY is None/empty")
-    print(f"[DEBUG] BREVO_SENDER_EMAIL={sender_email!r}")
 
     if not api_key or not sender_email:
         print("[Brevo Error] BREVO_API_KEY or BREVO_SENDER_EMAIL not set.")
@@ -221,6 +326,15 @@ def mask_email(email: str) -> str:
 
 @app.post("/api/request-otp")
 def request_otp(payload: OTPRequest, conn=Depends(get_db)):
+    now = time.time()
+    last_request = _last_otp_request_at.get(payload.matric_number)
+    if last_request and (now - last_request) < OTP_RESEND_COOLDOWN_SECONDS:
+        wait = int(OTP_RESEND_COOLDOWN_SECONDS - (now - last_request))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Please wait {wait}s before requesting another code."
+        )
+
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             "SELECT email FROM Voters WHERE matric_number = %s",
@@ -249,6 +363,10 @@ def request_otp(payload: OTPRequest, conn=Depends(get_db)):
     # Send email — raises HTTPException if it fails
     send_otp_email(email, otp_code)
 
+    # Only mark the cooldown / reset attempts once the email actually sent.
+    _last_otp_request_at[payload.matric_number] = now
+    _otp_attempt_counts[payload.matric_number] = 0
+
     return {
         "status": "success",
         "message": "OTP sent successfully.",
@@ -258,6 +376,19 @@ def request_otp(payload: OTPRequest, conn=Depends(get_db)):
 
 @app.post("/api/verify-otp")
 def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
+    attempts = _otp_attempt_counts.get(payload.matric_number, 0)
+    if attempts >= MAX_OTP_ATTEMPTS:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM OTP_Sessions WHERE matric_number = %s",
+                (payload.matric_number,)
+            )
+        conn.commit()
+        raise HTTPException(
+            status_code=429,
+            detail="Too many incorrect attempts. Please request a new code."
+        )
+
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             "SELECT expires_at FROM OTP_Sessions WHERE matric_number = %s AND otp_code = %s",
@@ -266,6 +397,7 @@ def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
         session = cur.fetchone()
 
     if not session:
+        _otp_attempt_counts[payload.matric_number] = attempts + 1
         raise HTTPException(status_code=401, detail="Invalid OTP code.")
 
     if datetime.now() > session["expires_at"]:
@@ -290,12 +422,23 @@ def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
 
     conn.commit()
 
+    _otp_attempt_counts.pop(payload.matric_number, None)
+
     has_voted = bool(voter["has_voted"])
     response = {
         "status": "success",
         "user": {"name": voter["name"], "matric": voter["matric_number"]},
         "hasVoted": has_voted,
     }
+
+    if not has_voted:
+        # This token is the proof that OTP verification actually happened.
+        # POST /api/vote requires it, so a ballot can no longer be cast just
+        # by knowing/guessing a matric number.
+        response["voteToken"] = create_token(
+            {"matric_number": voter["matric_number"], "purpose": "vote"},
+            expires_in_seconds=30 * 60,  # 30 minutes to complete the ballot
+        )
 
     if has_voted:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -325,7 +468,9 @@ def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/vote")
-def cast_vote(payload: VotePayload, conn=Depends(get_db)):
+def cast_vote(payload: VotePayload, authorization: Optional[str] = Header(None), conn=Depends(get_db)):
+    require_vote_session(payload.matric_number, authorization)
+
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT election_open FROM System_Settings WHERE id = 1")
         settings = cur.fetchone()
@@ -401,8 +546,22 @@ def get_turnout(conn=Depends(get_db)):
     }
 
 
+@app.post("/api/admin/login")
+def admin_login(payload: AdminLoginRequest):
+    if not ADMIN_PASSWORD:
+        raise HTTPException(
+            status_code=500,
+            detail="Admin login is not configured. Set ADMIN_PASSWORD on the server."
+        )
+    if not hmac.compare_digest(payload.password, ADMIN_PASSWORD):
+        raise HTTPException(status_code=401, detail="Incorrect admin password.")
+
+    token = create_token({"role": "admin"}, expires_in_seconds=8 * 3600)  # 8-hour session
+    return {"status": "success", "token": token}
+
+
 @app.get("/api/admin/tally")
-def get_vote_tally(conn=Depends(get_db)):
+def get_vote_tally(conn=Depends(get_db), _admin=Depends(require_admin)):
     positions = [
         "president", "vice_president", "speaker",
         "treasurer", "general_secretary", "coordinator",
@@ -424,7 +583,7 @@ def get_vote_tally(conn=Depends(get_db)):
 
 
 @app.get("/api/admin/status")
-def get_status(conn=Depends(get_db)):
+def get_status(conn=Depends(get_db), _admin=Depends(require_admin)):
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT election_open FROM System_Settings WHERE id = 1")
         settings = cur.fetchone()
@@ -436,7 +595,7 @@ def get_status(conn=Depends(get_db)):
 
 
 @app.post("/api/admin/status")
-def update_status(payload: StatusUpdate, conn=Depends(get_db)):
+def update_status(payload: StatusUpdate, conn=Depends(get_db), _admin=Depends(require_admin)):
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE System_Settings SET election_open = %s WHERE id = 1",

@@ -1,5 +1,6 @@
 # Security
 .env
+voters.csv
 
 # Python
 __pycache__/

@@ -97,9 +97,9 @@ const VotingBooth: React.FC = () => {
                                         </div>
 
                                         <div className="z-10 relative flex flex-col items-center w-full">
-                                            {/* NEW: Pulling the Cloudinary image link directly from constants.ts */}
+                                            {/* Cloudinary image link, pulled directly from constants.ts */}
                                             <img
-                                                src={(candidate as any).image}
+                                                src={candidate.image}
                                                 alt={candidate.name}
                                                 onError={(e) => {
                                                     // Clean fallback placeholder matching your blue UI theme

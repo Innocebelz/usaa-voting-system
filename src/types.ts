@@ -8,5 +8,12 @@ export interface User {
 export interface Candidate {
   id: string;
   name: string;
+  manifesto: string;
+  image: string;
+}
+
+export interface ElectionCategory {
   position: string;
+  unopposed: boolean;
+  candidates: Candidate[];
 }

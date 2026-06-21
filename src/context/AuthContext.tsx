@@ -32,6 +32,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return localStorage.getItem('laa_email') || null;
   });
 
+  // Proof that OTP verification succeeded — required by the backend to cast a vote.
+  // Without this, POST /api/vote would accept any matric number with no proof
+  // the OTP step ever happened.
+  const [voteToken, setVoteToken] = useState<string | null>(() => {
+    return localStorage.getItem('laa_vote_token') || null;
+  });
+
   // 2. Automatically sync state changes to Local Storage
   useEffect(() => {
     if (user) localStorage.setItem('laa_user', JSON.stringify(user));
@@ -47,6 +54,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (maskedEmail) localStorage.setItem('laa_email', maskedEmail);
     else localStorage.removeItem('laa_email');
   }, [maskedEmail]);
+
+  useEffect(() => {
+    if (voteToken) localStorage.setItem('laa_vote_token', voteToken);
+    else localStorage.removeItem('laa_vote_token');
+  }, [voteToken]);
 
   // 3. API Functions (Connected to Cloud Backend)
   const login = async (matNum: string) => {
@@ -87,10 +99,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       hasVoted: data.hasVoted,
       userBallot: data.userBallot
     });
+
+    // Present only when hasVoted is false — proves OTP was just verified.
+    setVoteToken(data.voteToken || null);
   };
 
   const vote = async (userBallot: Record<string, string>) => {
     if (!matNumber) throw new Error('Not authenticated');
+    if (!voteToken) throw new Error('Your voting session has expired. Please verify your OTP again.');
 
     const payload = {
       matric_number: matNumber,
@@ -105,7 +121,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const res = await fetch(`${API_BASE_URL}/api/vote`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${voteToken}`
+      },
       body: JSON.stringify(payload)
     });
 
@@ -114,6 +133,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw new Error(errorData.detail || 'Failed to cast vote');
     }
 
+    setVoteToken(null); // single-use: no longer needed once the ballot is recorded
     setUser((prev) => prev ? { ...prev, hasVoted: true, userBallot } : null);
   };
 
@@ -121,10 +141,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setUser(null);
     setMatNumber(null);
     setMaskedEmail(null);
+    setVoteToken(null);
     // Explicitly wipe storage on manual logout
     localStorage.removeItem('laa_user');
     localStorage.removeItem('laa_matric');
     localStorage.removeItem('laa_email');
+    localStorage.removeItem('laa_vote_token');
   };
 
   return (
