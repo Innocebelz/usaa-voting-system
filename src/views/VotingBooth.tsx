@@ -1,37 +1,54 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle2, ChevronDown, ShieldCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { ELECTION_DATA } from '../constants';
 
 const VotingBooth: React.FC = () => {
-    const [selections, setSelections] = useState<Record<string, string>>({});
-    const [showConfirm, setShowConfirm] = useState(false);
+    const [selections, setSelections]     = useState<Record<string, string>>({});
+    const [expanded, setExpanded]         = useState<Record<string, boolean>>({}); // manifesto open state per candidate
+    const [showConfirm, setShowConfirm]   = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [visible, setVisible]           = useState(false);
+    const [justSelected, setJustSelected] = useState<string | null>(null); // pulse on select
     const { user, vote } = useAuth();
     const navigate = useNavigate();
+    const confirmRef = useRef<HTMLDivElement>(null);
+
+    // Fade-in on mount
+    useEffect(() => {
+        const t = setTimeout(() => setVisible(true), 30);
+        return () => clearTimeout(t);
+    }, []);
 
     // Pre-select unopposed candidates
     useEffect(() => {
-        const initialSelections: Record<string, string> = {};
-        ELECTION_DATA.forEach(category => {
-            if (category.unopposed && category.candidates.length > 0) {
-                initialSelections[category.position] = category.candidates[0].id;
+        const initial: Record<string, string> = {};
+        ELECTION_DATA.forEach(cat => {
+            if (cat.unopposed && cat.candidates.length > 0) {
+                initial[cat.position] = cat.candidates[0].id;
             }
         });
-        setSelections(initialSelections);
+        setSelections(initial);
     }, []);
 
     const handleSelect = (position: string, candidateId: string) => {
-        setSelections(prev => ({
-            ...prev,
-            [position]: candidateId
-        }));
+        setSelections(prev => ({ ...prev, [position]: candidateId }));
+        // Brief pulse feedback
+        setJustSelected(candidateId);
+        setTimeout(() => setJustSelected(null), 600);
     };
 
-    const isFormComplete = ELECTION_DATA.every(
-        category => selections[category.position] !== undefined
-    );
+    const toggleManifesto = (candidateId: string, e: React.MouseEvent) => {
+        e.stopPropagation(); // don't trigger card selection
+        setExpanded(prev => ({ ...prev, [candidateId]: !prev[candidateId] }));
+    };
+
+    const totalPositions    = ELECTION_DATA.length;
+    const selectedCount     = ELECTION_DATA.filter(c => selections[c.position]).length;
+    const remaining         = totalPositions - selectedCount;
+    const isFormComplete    = remaining === 0;
+    const progressPct       = Math.round((selectedCount / totalPositions) * 100);
 
     const handleVoteSubmit = async () => {
         try {
@@ -46,144 +63,272 @@ const VotingBooth: React.FC = () => {
     };
 
     return (
-        <div className="w-full flex-1 flex flex-col pt-4">
-            <div className="mb-8">
-                <div className="flex items-center space-x-2 text-blue-900 mb-2">
-                    <span className="text-sm font-bold bg-blue-100 px-2 py-1 rounded">VOTING OPEN</span>
-                    <h2 className="text-3xl font-extrabold tracking-tight uppercase">Official Ballot</h2>
+        <div
+            className={`w-full flex-1 flex flex-col transition-all duration-500 ${
+                visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'
+            }`}
+        >
+            {/* ── Page header ────────────────────────────────────────────── */}
+            <div className="mb-6 pt-2">
+                <div className="flex items-center gap-3 mb-1">
+                    <span className="text-xs font-black bg-green-100 text-green-800 border border-green-300 px-2.5 py-1 rounded-full uppercase tracking-widest">
+                        Voting Open
+                    </span>
+                    <h2 className="text-2xl sm:text-3xl font-black tracking-tight uppercase text-zinc-900">
+                        Official Ballot
+                    </h2>
                 </div>
-                <p className="text-slate-500 font-medium">Please select a candidate for each position. Unopposed positions are pre-selected.</p>
-                <div className="mt-4 inline-flex items-center rounded-md bg-blue-50 px-2.5 py-1.5 text-sm font-bold text-blue-800 ring-1 ring-inset ring-blue-700/10 uppercase tracking-widest">
-                    Voter ID: {user?.matNumber}
+                <p className="text-zinc-500 font-medium text-sm">
+                    Select one candidate per position. Tap <strong>Read more</strong> to see their manifesto.
+                </p>
+                <div className="mt-3 inline-flex items-center bg-zinc-100 border border-zinc-200 px-3 py-1.5 rounded-lg text-xs font-mono font-bold text-zinc-700 uppercase tracking-widest">
+                    Voter: {user?.matNumber}
                 </div>
             </div>
 
-            <div className="flex-1 space-y-12 mb-10 text-left">
-                {ELECTION_DATA.map((category) => (
-                    <div key={category.position} className="border-t-2 border-slate-100 pt-8 mt-8 first:border-0 first:pt-0 first:mt-0">
-                        <div className="mb-6 flex items-center justify-between">
-                            <h3 className="text-xl font-bold text-slate-900 tracking-tight uppercase">{category.position}</h3>
-                            {category.unopposed && (
-                                <span className="inline-flex items-center space-x-1 bg-green-50 text-green-700 px-2 py-1 rounded text-xs font-bold uppercase tracking-wider border border-green-200">
-                  <CheckCircle2 className="w-3 h-3" />
-                  <span>Unopposed</span>
-                </span>
-                            )}
-                        </div>
+            {/* ── Progress bar ───────────────────────────────────────────── */}
+            <div className="mb-6 bg-white rounded-xl border-2 border-zinc-200 p-4">
+                <div className="flex justify-between items-center mb-2">
+                    <span className="text-xs font-black uppercase tracking-widest text-zinc-600">
+                        Progress
+                    </span>
+                    <span className={`text-xs font-black uppercase tracking-widest ${isFormComplete ? 'text-green-600' : 'text-yellow-600'}`}>
+                        {isFormComplete ? '✓ All positions selected' : `${remaining} remaining`}
+                    </span>
+                </div>
+                <div className="w-full h-2.5 bg-zinc-100 rounded-full overflow-hidden">
+                    <div
+                        className={`h-full rounded-full transition-all duration-500 ${isFormComplete ? 'bg-green-500' : 'bg-yellow-500'}`}
+                        style={{ width: `${progressPct}%` }}
+                    />
+                </div>
+                <div className="flex justify-between mt-1.5">
+                    {ELECTION_DATA.map(cat => (
+                        <div
+                            key={cat.position}
+                            title={cat.position}
+                            className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                                selections[cat.position] ? 'bg-yellow-500 scale-125' : 'bg-zinc-200'
+                            }`}
+                        />
+                    ))}
+                </div>
+            </div>
 
-                        <div className={`grid grid-cols-1 ${category.candidates.length > 1 ? 'sm:grid-cols-2 lg:grid-cols-2' : ''} gap-6`}>
-                            {category.candidates.map((candidate) => {
-                                const isSelected = selections[category.position] === candidate.id;
+            {/* ── Ballot positions ───────────────────────────────────────── */}
+            <div className="flex-1 space-y-6 mb-4">
+                {ELECTION_DATA.map((category) => {
+                    const positionSelected = !!selections[category.position];
 
-                                return (
-                                    <button
-                                        key={candidate.id}
-                                        onClick={() => !category.unopposed && handleSelect(category.position, candidate.id)}
-                                        disabled={category.unopposed}
-                                        className={`group relative bg-white border-2 rounded-xl p-6 transition-all text-center flex flex-col items-center w-full shadow-sm
-                      ${category.unopposed
-                                            ? 'border-blue-300 bg-blue-50/50 cursor-default opacity-90 relative overflow-hidden ring-2 ring-blue-100'
-                                            : isSelected
-                                                ? 'border-blue-600 ring-4 ring-blue-600/10 shadow-xl scale-[1.02] bg-white'
-                                                : 'border-slate-200 hover:border-blue-300 hover:shadow-md'
-                                        }`}
-                                    >
-                                        <div className="absolute top-4 right-4 z-20">
-                                            <div className={`w-6 h-6 border-2 rounded-full flex items-center justify-center shrink-0 transition-colors
-                        ${isSelected ? 'border-blue-600 bg-blue-600' : 'border-slate-300 bg-slate-50 group-hover:border-blue-400'}`}
+                    return (
+                        <div
+                            key={category.position}
+                            className={`bg-white rounded-2xl border-2 overflow-hidden transition-all duration-300 ${
+                                positionSelected ? 'border-yellow-400 shadow-md' : 'border-zinc-200'
+                            }`}
+                        >
+                            {/* Position header */}
+                            <div className={`px-4 py-3 flex items-center justify-between border-b-2 ${
+                                positionSelected ? 'bg-yellow-50 border-yellow-200' : 'bg-zinc-50 border-zinc-100'
+                            }`}>
+                                <div className="flex items-center gap-2">
+                                    {positionSelected
+                                        ? <CheckCircle2 className="w-4 h-4 text-yellow-600 shrink-0" />
+                                        : <div className="w-4 h-4 rounded-full border-2 border-zinc-300 shrink-0" />
+                                    }
+                                    <h3 className="font-black text-zinc-900 uppercase tracking-tight text-sm sm:text-base">
+                                        {category.position}
+                                    </h3>
+                                </div>
+                                {category.unopposed && (
+                                    <span className="text-[10px] font-black text-green-700 bg-green-100 border border-green-200 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                                        Unopposed
+                                    </span>
+                                )}
+                            </div>
+
+                            {/* Candidate list — compact rows */}
+                            <div className="divide-y divide-zinc-100">
+                                {category.candidates.map((candidate) => {
+                                    const isSelected  = selections[category.position] === candidate.id;
+                                    const isExpanded  = expanded[candidate.id] ?? false;
+                                    const isPulsing   = justSelected === candidate.id;
+
+                                    return (
+                                        <div key={candidate.id} className="flex flex-col">
+
+                                            {/* ── Candidate row ── */}
+                                            <button
+                                                onClick={() => !category.unopposed && handleSelect(category.position, candidate.id)}
+                                                disabled={category.unopposed}
+                                                className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-all duration-200 ${
+                                                    category.unopposed
+                                                        ? 'cursor-default'
+                                                        : 'active:bg-zinc-50'
+                                                } ${isSelected ? 'bg-yellow-50' : 'bg-white hover:bg-zinc-50'} ${
+                                                    isPulsing ? 'scale-[0.99]' : 'scale-100'
+                                                }`}
                                             >
-                                                {isSelected && <CheckCircle2 className="w-4 h-4 text-white" />}
+                                                {/* Photo — small on mobile, bigger on desktop */}
+                                                <div className={`relative shrink-0 transition-all duration-300 ${isSelected ? 'ring-2 ring-yellow-500 ring-offset-1 rounded-full' : ''}`}>
+                                                    <img
+                                                        src={candidate.image}
+                                                        alt={candidate.name}
+                                                        onError={(e) => {
+                                                            (e.target as HTMLImageElement).src =
+                                                                `https://ui-avatars.com/api/?name=${encodeURIComponent(candidate.name)}&background=18181b&color=eab308&size=128`;
+                                                        }}
+                                                        className="w-12 h-12 sm:w-16 sm:h-16 rounded-full object-cover border-2 border-zinc-200"
+                                                    />
+                                                    {isSelected && (
+                                                        <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 bg-yellow-500 rounded-full flex items-center justify-center border-2 border-white">
+                                                            <CheckCircle2 className="w-3 h-3 text-zinc-900" />
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Name + position */}
+                                                <div className="flex-1 min-w-0">
+                                                    <p className={`font-black text-sm sm:text-base truncate ${isSelected ? 'text-zinc-900' : 'text-zinc-800'}`}>
+                                                        {candidate.name}
+                                                    </p>
+                                                    <p className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                                                        {category.position}
+                                                    </p>
+                                                </div>
+
+                                                {/* Radio indicator */}
+                                                <div className={`shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${
+                                                    isSelected
+                                                        ? 'border-yellow-500 bg-yellow-500'
+                                                        : 'border-zinc-300'
+                                                }`}>
+                                                    {isSelected && <div className="w-2 h-2 rounded-full bg-zinc-900" />}
+                                                </div>
+                                            </button>
+
+                                            {/* Read more toggle */}
+                                            <button
+                                                onClick={(e) => toggleManifesto(candidate.id, e)}
+                                                className={`flex items-center gap-1 px-4 pb-3 text-[11px] font-bold uppercase tracking-wider transition-colors ${
+                                                    isSelected ? 'text-yellow-600 hover:text-yellow-700' : 'text-zinc-400 hover:text-zinc-600'
+                                                }`}
+                                            >
+                                                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                                                {isExpanded ? 'Hide manifesto' : 'Read manifesto'}
+                                            </button>
+
+                                            {/* Manifesto — expands/collapses */}
+                                            <div className={`overflow-hidden transition-all duration-300 ease-in-out ${isExpanded ? 'max-h-64' : 'max-h-0'}`}>
+                                                <p className={`px-4 pb-4 text-sm italic leading-relaxed border-t pt-3 ${
+                                                    isSelected ? 'border-yellow-100 text-zinc-600' : 'border-zinc-100 text-zinc-500'
+                                                }`}>
+                                                    "{candidate.manifesto}"
+                                                </p>
                                             </div>
                                         </div>
-
-                                        <div className="z-10 relative flex flex-col items-center w-full">
-                                            {/* Cloudinary image link, pulled directly from constants.ts */}
-                                            <img
-                                                src={candidate.image}
-                                                alt={candidate.name}
-                                                onError={(e) => {
-                                                    // Clean fallback placeholder matching your blue UI theme
-                                                    (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(candidate.name)}&background=eff6ff&color=1e3a8a&size=256`;
-                                                }}
-                                                className={`w-24 h-24 rounded-full object-cover mx-auto mb-4 border-4 shadow-sm transition-colors ${isSelected ? 'border-blue-100' : 'border-white ring-1 ring-slate-200'}`}
-                                            />
-
-                                            <span className="text-xl font-bold text-slate-900 block">{candidate.name}</span>
-
-                                            {category.unopposed ? (
-                                                <span className="text-[10px] font-black text-blue-700 uppercase tracking-widest mt-1 mb-2 bg-blue-200/50 border border-blue-200 px-2 py-0.5 rounded inline-block">Pre-Selected</span>
-                                            ) : (
-                                                <span className="text-xs font-semibold text-slate-500 block uppercase tracking-wider mt-1 mb-2">{category.position}</span>
-                                            )}
-
-                                            <p className={`text-sm italic leading-relaxed mt-2 pt-4 border-t w-full
-                        ${isSelected ? 'border-blue-100 text-slate-700' : 'border-slate-100 text-slate-500'}
-                      `}>
-                                                "{candidate.manifesto}"
-                                            </p>
-                                        </div>
-
-                                        {category.unopposed && (
-                                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.03] text-blue-900 z-0 pointer-events-none">
-                                                <CheckCircle2 className="w-48 h-48" />
-                                            </div>
-                                        )}
-                                    </button>
-                                );
-                            })}
+                                    );
+                                })}
+                            </div>
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
             </div>
 
-            <div className="mt-auto flex flex-col items-center pb-8 border-t-2 border-slate-200 pt-8 sticky bottom-0 bg-slate-50 z-10 w-full px-4 -mx-4 sm:mx-0 sm:px-0">
+            {/* ── Sticky submit bar ──────────────────────────────────────── */}
+            <div className="sticky bottom-0 z-20 bg-stone-50 border-t-2 border-zinc-200 pt-4 pb-6 px-0 -mx-4 sm:mx-0 sm:px-0 px-4">
                 {!isFormComplete && (
-                    <p className="text-sm font-bold text-red-500 uppercase tracking-wider mb-4 animate-pulse">
-                        Complete all selections to submit
+                    <p className="text-center text-xs font-black text-zinc-400 uppercase tracking-widest mb-3">
+                        {remaining} position{remaining !== 1 ? 's' : ''} still need{remaining === 1 ? 's' : ''} a selection
                     </p>
                 )}
                 <button
                     onClick={() => setShowConfirm(true)}
                     disabled={!isFormComplete || isSubmitting}
-                    className="w-full max-w-sm bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-8 rounded-xl text-lg shadow-lg flex items-center justify-center space-x-3 transition-colors border-b-4 border-blue-800 active:border-b-0 disabled:bg-slate-300 disabled:border-slate-400 disabled:text-slate-500 disabled:cursor-not-allowed uppercase"
+                    className={`w-full max-w-sm mx-auto flex items-center justify-center gap-3 py-4 px-8 rounded-xl text-sm font-black shadow-lg transition-all duration-200 border-b-4 active:border-b-0 active:scale-95 uppercase tracking-widest ${
+                        isFormComplete
+                            ? 'bg-zinc-900 text-white border-zinc-700 hover:bg-zinc-800'
+                            : 'bg-zinc-100 text-zinc-400 border-zinc-200 cursor-not-allowed'
+                    }`}
                 >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04a11.367 11.367 0 00-3.45 8.335c0 5.99 7.153 10.518 11.377 14.623a.994.994 0 001.353 0c4.224-4.105 11.377-8.633 11.377-14.623a11.367 11.367 0 00-3.45-8.335z"></path></svg>
-                    <span>Submit Secure Vote</span>
+                    <ShieldCheck className={`w-5 h-5 ${isFormComplete ? 'text-yellow-400' : 'text-zinc-400'}`} />
+                    Submit Secure Vote
                 </button>
             </div>
 
+            {/* ── Confirm modal ──────────────────────────────────────────── */}
             {showConfirm && (
-                <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl p-6 sm:p-8 max-w-sm w-full animate-in fade-in zoom-in-95 duration-200 border-2 border-slate-200">
-                        <div className="flex items-center justify-center w-12 h-12 bg-amber-100 rounded-full mb-4 mx-auto border-2 border-amber-200">
-                            <AlertCircle className="h-6 w-6 text-amber-600" />
-                        </div>
-                        <h3 className="text-lg font-bold text-slate-900 text-center mb-2 uppercase tracking-tight">Confirm Your Vote</h3>
-                        <p className="text-sm text-slate-500 text-center mb-6 font-medium">
-                            Are you sure? This action cannot be undone and your vote will be securely recorded.
-                        </p>
-                        <div className="space-y-3">
-                            <button
-                                onClick={handleVoteSubmit}
-                                disabled={isSubmitting}
-                                className="w-full bg-blue-600 text-white rounded-md py-3 font-semibold hover:bg-blue-700 disabled:opacity-50 flex justify-center items-center transition-colors uppercase text-sm border-b-4 border-blue-800 active:border-b-0"
-                            >
-                                {isSubmitting ? (
-                                    <>
-                                        <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5" />
-                                        Casting Vote...
-                                    </>
-                                ) : (
-                                    'Yes, submit my ballot'
-                                )}
-                            </button>
-                            <button
-                                onClick={() => setShowConfirm(false)}
-                                disabled={isSubmitting}
-                                className="w-full bg-white text-slate-700 border-2 border-slate-200 rounded-md py-3 font-semibold hover:bg-slate-50 hover:border-slate-300 disabled:opacity-50 transition-colors uppercase text-sm"
-                            >
-                                Cancel
-                            </button>
+                <div className="fixed inset-0 bg-zinc-900/60 flex items-end sm:items-center justify-center p-4 z-50 backdrop-blur-sm">
+                    <div
+                        ref={confirmRef}
+                        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm border-2 border-zinc-200 overflow-hidden"
+                    >
+                        {/* Gold top bar */}
+                        <div className="h-1.5 bg-yellow-500 w-full" />
+
+                        <div className="p-6">
+                            <div className="flex items-center justify-center w-12 h-12 bg-amber-100 rounded-full mb-4 mx-auto border-2 border-amber-200">
+                                <AlertCircle className="h-6 w-6 text-amber-600" />
+                            </div>
+                            <h3 className="text-lg font-black text-zinc-900 text-center mb-2 uppercase tracking-tight">
+                                Confirm Your Vote
+                            </h3>
+                            <p className="text-sm text-zinc-500 text-center mb-1 font-medium">
+                                You are about to submit your ballot for{' '}
+                                <strong className="text-zinc-800">{totalPositions} positions</strong>.
+                            </p>
+                            <p className="text-xs text-zinc-400 text-center mb-6 font-semibold uppercase tracking-wider">
+                                This cannot be undone.
+                            </p>
+
+                            {/* Quick summary of selections */}
+                            <div className="bg-zinc-50 rounded-lg border border-zinc-200 divide-y divide-zinc-100 mb-6 text-left max-h-48 overflow-y-auto">
+                                {ELECTION_DATA.map(cat => {
+                                    const sel = cat.candidates.find(c => c.id === selections[cat.position]);
+                                    return sel ? (
+                                        <div key={cat.position} className="flex items-center gap-3 px-3 py-2">
+                                            <img
+                                                src={sel.image}
+                                                alt={sel.name}
+                                                onError={(e) => {
+                                                    (e.target as HTMLImageElement).src =
+                                                        `https://ui-avatars.com/api/?name=${encodeURIComponent(sel.name)}&background=18181b&color=eab308&size=64`;
+                                                }}
+                                                className="w-8 h-8 rounded-full object-cover border border-zinc-200 shrink-0"
+                                            />
+                                            <div className="min-w-0">
+                                                <p className="text-xs font-black text-zinc-900 truncate">{sel.name}</p>
+                                                <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">{cat.position}</p>
+                                            </div>
+                                            <CheckCircle2 className="w-4 h-4 text-yellow-500 shrink-0 ml-auto" />
+                                        </div>
+                                    ) : null;
+                                })}
+                            </div>
+
+                            <div className="space-y-3">
+                                <button
+                                    onClick={handleVoteSubmit}
+                                    disabled={isSubmitting}
+                                    className="w-full bg-zinc-900 text-white rounded-xl py-3.5 font-black hover:bg-zinc-800 disabled:opacity-50 flex justify-center items-center transition-all uppercase text-sm border-b-4 border-zinc-700 active:border-b-0 active:scale-95 tracking-widest"
+                                >
+                                    {isSubmitting ? (
+                                        <>
+                                            <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5 text-yellow-400" />
+                                            <span className="text-yellow-400">Casting Vote...</span>
+                                        </>
+                                    ) : (
+                                        'Yes, Submit My Ballot'
+                                    )}
+                                </button>
+                                <button
+                                    onClick={() => setShowConfirm(false)}
+                                    disabled={isSubmitting}
+                                    className="w-full bg-white text-zinc-600 border-2 border-zinc-200 rounded-xl py-3.5 font-black hover:bg-zinc-50 hover:border-zinc-300 disabled:opacity-50 transition-all uppercase text-sm tracking-widest"
+                                >
+                                    Go Back &amp; Review
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
