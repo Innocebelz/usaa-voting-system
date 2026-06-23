@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '../types';
+import { ELECTION_DATA } from '../constants';
 
-// --- YOUR LIVE RENDER BACKEND URL ---
+// --- LIVE RENDER BACKEND URL ---
 const API_BASE_URL = 'https://laa-voting-system.onrender.com';
 
 // ── Session expiry ────────────────────────────────────────────────────────────
@@ -133,16 +134,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!matNumber) throw new Error('Not authenticated');
     if (!voteToken) throw new Error('Your voting session has expired. Please verify your OTP again.');
 
-    const payload = {
-      matric_number: matNumber,
-      choices: userBallot,
-      president: userBallot['President'] || '',
-      vice_president: userBallot['Vice President'] || '',
-      speaker: userBallot['Speaker'] || '',
-      treasurer: userBallot['Treasurer'] || '',
-      general_secretary: userBallot['General Secretary'] || '',
-      coordinator: userBallot['Coordinator'] || ''
-    };
+    const payload: Record<string, unknown> = { matric_number: matNumber, choices: {} };
+
+    // Build choices dynamically from ELECTION_DATA so that adding/renaming
+    // positions only requires updating constants.ts — not this file.
+    const choices: Record<string, string> = {};
+    ELECTION_DATA.forEach(cat => {
+      choices[cat.dbKey] = userBallot[cat.position] || '';
+    });
+    payload.choices = choices;
+    // Also spread individual fields for backwards-compat with the backend model
+    Object.assign(payload, choices);
 
     const res = await fetch(`${API_BASE_URL}/api/vote`, {
       method: 'POST',

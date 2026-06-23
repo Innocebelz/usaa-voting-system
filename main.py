@@ -28,7 +28,7 @@ app = FastAPI(title="USSA Voting API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://ussa-voting-system.vercel.app",
+        "https://laa-voting-system.vercel.app",
         "http://localhost:5173",
         "http://localhost:3000",
     ],
@@ -180,13 +180,14 @@ def init_db():
 
             cur.execute("""
                         CREATE TABLE IF NOT EXISTS Ballots (
-                                                               matric_number    TEXT PRIMARY KEY REFERENCES Voters(matric_number),
-                            president        TEXT,
-                            vice_president   TEXT,
-                            speaker          TEXT,
-                            treasurer        TEXT,
-                            general_secretary TEXT,
-                            coordinator      TEXT
+                                                               matric_number              TEXT PRIMARY KEY REFERENCES Voters(matric_number),
+                            president                  TEXT,
+                            male_vice_president        TEXT,
+                            female_vice_president      TEXT,
+                            minister_of_finance        TEXT,
+                            minister_of_education      TEXT,
+                            minister_of_information    TEXT,
+                            general_secretary          TEXT
                             )
                         """)
 
@@ -231,7 +232,15 @@ class OTPVerify(BaseModel):
 
 class VotePayload(BaseModel):
     matric_number: str
-    choices: Dict[str, str]
+    choices: Dict[str, str]   # keys are dbKey values from constants.ts
+    # Individual fields extracted from choices for clarity — all optional
+    president:               str = ''
+    male_vice_president:     str = ''
+    female_vice_president:   str = ''
+    minister_of_finance:     str = ''
+    minister_of_education:   str = ''
+    minister_of_information: str = ''
+    general_secretary:       str = ''
 
 
 class StatusUpdate(BaseModel):
@@ -452,12 +461,13 @@ def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
             b = dict(ballot)
             b.pop("matric_number", None)
             response["userBallot"] = {
-                "President":        b.get("president"),
-                "Vice President":   b.get("vice_president"),
-                "Speaker":          b.get("speaker"),
-                "Treasurer":        b.get("treasurer"),
-                "General Secretary": b.get("general_secretary"),
-                "Coordinator":      b.get("coordinator"),
+                "President":                                   b.get("president"),
+                "Male Vice President":                         b.get("male_vice_president"),
+                "Female Vice President":                       b.get("female_vice_president"),
+                "Minister of Finance":                         b.get("minister_of_finance"),
+                "Minister of Education, Curriculars and Sports": b.get("minister_of_education"),
+                "Minister of Information and Publicity":       b.get("minister_of_information"),
+                "General Secretary":                           b.get("general_secretary"),
             }
 
     return response
@@ -496,19 +506,27 @@ def cast_vote(payload: VotePayload, authorization: Optional[str] = Header(None),
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO Ballots
-                (matric_number, president, vice_president, speaker,
-                 treasurer, general_secretary, coordinator)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO Ballots (
+                    matric_number,
+                    president,
+                    male_vice_president,
+                    female_vice_president,
+                    minister_of_finance,
+                    minister_of_education,
+                    minister_of_information,
+                    general_secretary
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     payload.matric_number,
-                    c.get("President"),
-                    c.get("Vice President"),
-                    c.get("Speaker"),
-                    c.get("Treasurer"),
-                    c.get("General Secretary"),
-                    c.get("Coordinator"),
+                    c.get("president"),
+                    c.get("male_vice_president"),
+                    c.get("female_vice_president"),
+                    c.get("minister_of_finance"),
+                    c.get("minister_of_education"),
+                    c.get("minister_of_information"),
+                    c.get("general_secretary"),
                 ),
             )
             cur.execute(
@@ -563,8 +581,13 @@ def admin_login(payload: AdminLoginRequest):
 @app.get("/api/admin/tally")
 def get_vote_tally(conn=Depends(get_db), _admin=Depends(require_admin)):
     positions = [
-        "president", "vice_president", "speaker",
-        "treasurer", "general_secretary", "coordinator",
+        "president",
+        "male_vice_president",
+        "female_vice_president",
+        "minister_of_finance",
+        "minister_of_education",
+        "minister_of_information",
+        "general_secretary",
     ]
     results = {}
 

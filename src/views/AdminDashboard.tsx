@@ -40,10 +40,6 @@ function useCountUp(target: number, duration = 1000, delay = 0) {
     return value;
 }
 
-// Format backend position key → readable label (vice_president → VICE PRESIDENT)
-const fmtPosition = (key: string) =>
-    key.replace(/_/g, ' ').toUpperCase();
-
 const AdminDashboard: React.FC = () => {
     const [turnout, setTurnout]               = useState<TurnoutData | null>(null);
     const [tally, setTally]                   = useState<TallyData | null>(null);
@@ -113,15 +109,12 @@ const AdminDashboard: React.FC = () => {
     // ── Helpers ───────────────────────────────────────────────────────────
 
     // For each position in ELECTION_DATA, merge in live vote counts from tally.
-    // This ensures ALL candidates show up — even those with 0 votes so far.
-    const buildPositionResults = (positionKey: string) => {
-        const label     = fmtPosition(positionKey);
-        const category  = ELECTION_DATA.find(
-            c => c.position.toUpperCase() === label
-        );
+    // Uses dbKey for matching — safe even when position names contain commas/special chars.
+    const buildPositionResults = (dbKey: string) => {
+        const category  = ELECTION_DATA.find(c => c.dbKey === dbKey);
         if (!category) return null;
 
-        const rawVotes  = tally?.[positionKey] ?? [];
+        const rawVotes  = tally?.[dbKey] ?? [];
         const voteMap   = Object.fromEntries(rawVotes.map(r => [r.candidate_id, r.votes]));
 
         const candidates = category.candidates.map(c => ({
@@ -132,7 +125,7 @@ const AdminDashboard: React.FC = () => {
         })).sort((a, b) => b.votes - a.votes);
 
         const total = candidates.reduce((s, c) => s + c.votes, 0);
-        return { label, candidates, total };
+        return { label: category.position, candidates, total };
     };
 
     const toggleElectionStatus = async () => {
@@ -193,10 +186,8 @@ const AdminDashboard: React.FC = () => {
     const CIRCUMF = 2 * Math.PI * R;
     const offset  = CIRCUMF - (animPct / 100) * CIRCUMF;
 
-    // All position keys to render — use ELECTION_DATA order, not backend key order
-    const positionKeys = ELECTION_DATA.map(c =>
-        c.position.toLowerCase().replace(/ /g, '_')
-    );
+    // dbKey is the exact Postgres column name — no derivation needed
+    const positionKeys = ELECTION_DATA.map(c => c.dbKey);
 
     return (
         <div

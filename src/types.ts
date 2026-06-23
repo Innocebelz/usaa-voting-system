@@ -13,7 +13,8 @@ export interface Candidate {
 }
 
 export interface ElectionCategory {
-  position: string;
+  position: string;   // Display name shown on the ballot
+  dbKey: string;      // Database column name — never change this once votes are cast
   unopposed: boolean;
   candidates: Candidate[];
 }
