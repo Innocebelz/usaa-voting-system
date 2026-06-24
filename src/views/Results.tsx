@@ -117,7 +117,7 @@ const Results: React.FC = () => {
             <button
                 onClick={handleLogout}
                 title="Sign out"
-                className="text-zinc-400 hover:text-zinc-700 p-2 rounded-full hover:bg-zinc-100 transition-colors shrink-0"
+                className="text-red-600 hover:text-zinc-700 p-2 rounded-full hover:bg-zinc-100 transition-colors shrink-0"
             >
               <LogOut className="h-5 w-5" />
             </button>
