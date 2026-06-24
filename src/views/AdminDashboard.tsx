@@ -214,7 +214,7 @@ const AdminDashboard: React.FC = () => {
                 </div>
                 <button
                     onClick={handleExit}
-                    className="flex items-center gap-2 text-sm font-black text-zinc-400 hover:text-zinc-800 transition-colors uppercase tracking-wider"
+                    className="flex items-center gap-2 text-sm font-black text-red-600 hover:text-zinc-800 transition-colors uppercase tracking-wider"
                 >
                     <LogOut className="w-4 h-4" />
                     Exit
