@@ -5,8 +5,9 @@ import { Loader2, ShieldAlert, Eye, EyeOff } from 'lucide-react';
 const BACKEND_URL = 'https://laa-voting-system.onrender.com';
 
 const AdminLogin: React.FC = () => {
+    const [username, setUsername]   = useState('');
     const [password, setPassword]   = useState('');
-    const [show, setShow]           = useState(false);   // toggle password visibility
+    const [show, setShow]           = useState(false);
     const [loading, setLoading]     = useState(false);
     const [error, setError]         = useState('');
     const [visible, setVisible]     = useState(false);
@@ -19,7 +20,7 @@ const AdminLogin: React.FC = () => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!password) { setError('Password is required.'); return; }
+        if (!username || !password) { setError('Username and password are required.'); return; }
 
         try {
             setError('');
@@ -27,18 +28,19 @@ const AdminLogin: React.FC = () => {
             const res  = await fetch(`${BACKEND_URL}/api/admin/login`, {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify({ password }),
+                body:    JSON.stringify({ username: username.trim(), password }),
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.detail || 'Incorrect password.');
+            if (!res.ok) throw new Error(data.detail || 'Incorrect credentials.');
 
-            // sessionStorage — clears automatically when the tab is closed,
-            // which matters when using a shared device on election day.
-            sessionStorage.setItem('laa_admin_token', data.token);
+            sessionStorage.setItem('laa_admin_token',     data.token);
+            sessionStorage.setItem('laa_admin_username',  data.username);
+            sessionStorage.setItem('laa_admin_full_name', data.full_name);
+            sessionStorage.setItem('laa_admin_user_role', data.user_role);
             navigate('/admin');
         } catch (err: any) {
-            setError(err.message || 'Incorrect password.');
-            setPassword('');        // clear field on wrong attempt
+            setError(err.message || 'Incorrect credentials.');
+            setPassword('');
         } finally {
             setLoading(false);
         }
@@ -70,7 +72,28 @@ const AdminLogin: React.FC = () => {
                         </p>
                     </div>
 
-                    <form onSubmit={handleSubmit} className="space-y-5">
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        {/* Username */}
+                        <div>
+                            <label htmlFor="adminUsername" className="block text-xs font-black uppercase tracking-widest text-zinc-800 mb-2">
+                                Username
+                            </label>
+                            <input
+                                type="text"
+                                id="adminUsername"
+                                autoFocus
+                                autoComplete="username"
+                                className={`block w-full rounded-lg border-2 py-3 px-4 text-zinc-900 shadow-sm outline-none transition-all duration-200 text-sm ${
+                                    error ? 'border-red-400 bg-red-50' : 'border-zinc-200 bg-zinc-50 focus:border-yellow-500 focus:bg-white'
+                                } placeholder:text-zinc-400`}
+                                placeholder="your.username"
+                                value={username}
+                                onChange={(e) => { setUsername(e.target.value); if (error) setError(''); }}
+                                disabled={loading}
+                            />
+                        </div>
+
+                        {/* Password */}
                         <div>
                             <label
                                 htmlFor="adminPassword"
@@ -116,7 +139,7 @@ const AdminLogin: React.FC = () => {
 
                         <button
                             type="submit"
-                            disabled={loading || !password}
+                            disabled={loading || !username || !password}
                             className="w-full flex justify-center items-center rounded-xl bg-zinc-900 px-3 py-4 text-sm font-black text-white shadow-lg hover:bg-zinc-800 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150 border-b-4 border-zinc-700 active:border-b-0 uppercase tracking-widest"
                         >
                             {loading ? (

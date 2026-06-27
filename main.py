@@ -13,11 +13,14 @@ from typing import Dict, Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from passlib.context import CryptContext
 
 load_dotenv()
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -100,8 +103,9 @@ def _extract_bearer_token(authorization: Optional[str]) -> str:
 
 
 def require_admin(authorization: Optional[str] = Header(None)):
-    """FastAPI dependency: protects admin-only routes with a Bearer token."""
-    token = _extract_bearer_token(authorization)
+    """FastAPI dependency: protects admin-only routes with a Bearer token.
+    Returns the full token payload so routes can access the admin's username."""
+    token   = _extract_bearer_token(authorization)
     payload = verify_token(token)
     if not payload or payload.get("role") != "admin":
         raise HTTPException(status_code=401, detail="Invalid or expired admin session. Please log in again.")
@@ -167,45 +171,82 @@ def init_db():
                                                               name             TEXT NOT NULL,
                                                               email            TEXT NOT NULL,
                                                               has_voted        BOOLEAN NOT NULL DEFAULT FALSE
-                        )
-                        """)
+                        )""")
 
             cur.execute("""
                         CREATE TABLE IF NOT EXISTS OTP_Sessions (
                                                                     matric_number TEXT REFERENCES Voters(matric_number),
                             otp_code      TEXT NOT NULL,
                             expires_at    TIMESTAMP NOT NULL
-                            )
-                        """)
+                            )""")
 
             cur.execute("""
                         CREATE TABLE IF NOT EXISTS Ballots (
-                                                               ballot_id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                            president                  TEXT,
-                            male_vice_president        TEXT,
-                            female_vice_president      TEXT,
-                            minister_of_finance        TEXT,
-                            minister_of_education      TEXT,
-                            minister_of_information    TEXT,
-                            general_secretary          TEXT,
-                            cast_at                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                            )
-                        """)
+                                                               ballot_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            president               TEXT,
+                            male_vice_president     TEXT,
+                            female_vice_president   TEXT,
+                            minister_of_finance     TEXT,
+                            minister_of_education   TEXT,
+                            minister_of_information TEXT,
+                            general_secretary       TEXT,
+                            cast_at                 TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                            )""")
 
             cur.execute("""
                         CREATE TABLE IF NOT EXISTS System_Settings (
                                                                        id            INTEGER PRIMARY KEY,
                                                                        election_open BOOLEAN NOT NULL DEFAULT TRUE
-                        )
-                        """)
+                        )""")
+
+            # Per-EC-member admin accounts (replaces shared ADMIN_PASSWORD)
+            cur.execute("""
+                        CREATE TABLE IF NOT EXISTS Admin_Users (
+                                                                   id            SERIAL PRIMARY KEY,
+                                                                   username      TEXT UNIQUE NOT NULL,
+                                                                   password_hash TEXT NOT NULL,
+                                                                   full_name     TEXT NOT NULL,
+                                                                   role          TEXT NOT NULL DEFAULT 'ec_member',
+                                                                   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+                                                                   created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )""")
+
+            # Audit trail — every sensitive action gets a row
+            cur.execute("""
+                        CREATE TABLE IF NOT EXISTS Audit_Log (
+                                                                 id             SERIAL PRIMARY KEY,
+                                                                 admin_username TEXT,
+                                                                 action         TEXT NOT NULL,
+                                                                 detail         TEXT,
+                                                                 ip_address     TEXT,
+                                                                 logged_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )""")
 
             cur.execute("SELECT COUNT(*) FROM System_Settings")
             if cur.fetchone()[0] == 0:
-                cur.execute(
-                    "INSERT INTO System_Settings (id, election_open) VALUES (1, TRUE)"
-                )
+                cur.execute("INSERT INTO System_Settings (id, election_open) VALUES (1, TRUE)")
 
         conn.commit()
+
+        # Seed a super_admin from ADMIN_PASSWORD env var if no admins exist yet.
+        # This preserves backward compatibility — existing deployments get an
+        # "admin" account with their current password. Create proper named
+        # accounts via the dashboard, then deactivate this one.
+        seed_password = os.getenv("ADMIN_PASSWORD")
+        if seed_password:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT COUNT(*) as c FROM Admin_Users")
+                if cur.fetchone()["c"] == 0:
+                    hashed = pwd_context.hash(seed_password)
+                    cur.execute(
+                        """INSERT INTO Admin_Users (username, password_hash, full_name, role)
+                           VALUES ('admin', %s, 'System Administrator', 'super_admin')
+                               ON CONFLICT (username) DO NOTHING""",
+                        (hashed,)
+                    )
+                    conn.commit()
+                    print("[Init] Default super_admin 'admin' seeded from ADMIN_PASSWORD.")
+
     except Exception as e:
         conn.rollback()
         print(f"[DB Init Error] {e}")
@@ -249,7 +290,39 @@ class StatusUpdate(BaseModel):
 
 
 class AdminLoginRequest(BaseModel):
+    username: str
     password: str
+
+
+class CreateAdminUserRequest(BaseModel):
+    username:  str
+    password:  str
+    full_name: str
+    role:      str = "ec_member"   # "ec_member" or "super_admin"
+
+
+# ---------------------------------------------------------------------------
+# Audit log helper
+# ---------------------------------------------------------------------------
+
+def log_audit(
+        conn,
+        action:         str,
+        admin_username: str  = "system",
+        detail:         str  = None,
+        ip_address:     str  = None,
+):
+    """Insert one row into Audit_Log. Non-fatal — logs to stdout if it fails."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO Audit_Log (admin_username, action, detail, ip_address)
+                   VALUES (%s, %s, %s, %s)""",
+                (admin_username, action, detail, ip_address),
+            )
+        conn.commit()
+    except Exception as e:
+        print(f"[Audit] Failed to write log entry: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +331,8 @@ class AdminLoginRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _otp_html(otp_code: str, voter_name: str = "") -> str:
-    LOGO_URL = "https://res.cloudinary.com/dbdgbj4qz/image/upload/v1782139265/logo_ze2vq7.jpg"
+    # TODO: replace with your real Cloudinary logo URL once uploaded
+    LOGO_URL = "https://res.cloudinary.com/REPLACE/image/upload/REPLACE/ussa_logo.png"
 
     greeting = f"Hello <strong>{voter_name}</strong>," if voter_name else "Hello,"
 
@@ -724,6 +798,11 @@ def cast_vote(payload: VotePayload, authorization: Optional[str] = Header(None),
                 (payload.matric_number,),
             )
         conn.commit()
+
+        # Audit: records ballot_id only — not matric_number, not choices
+        log_audit(conn, "vote_cast", admin_username="voter",
+                  detail=f"ballot_id={ballot_id}")
+
     except Exception as e:
         conn.rollback()
         print(f"[Vote Error] {e}")
@@ -857,17 +936,49 @@ def verify_ballot(ballot_id: str, conn=Depends(get_db)):
 
 
 @app.post("/api/admin/login")
-def admin_login(payload: AdminLoginRequest):
-    if not ADMIN_PASSWORD:
-        raise HTTPException(
-            status_code=500,
-            detail="Admin login is not configured. Set ADMIN_PASSWORD on the server."
-        )
-    if not hmac.compare_digest(payload.password, ADMIN_PASSWORD):
-        raise HTTPException(status_code=401, detail="Incorrect admin password.")
+def admin_login(payload: AdminLoginRequest, request: Request, conn=Depends(get_db)):
+    ip = request.client.host if request.client else None
 
-    token = create_token({"role": "admin"}, expires_in_seconds=8 * 3600)  # 8-hour session
-    return {"status": "success", "token": token}
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT * FROM Admin_Users WHERE username = %s AND is_active = TRUE",
+            (payload.username.strip(),)
+        )
+        admin = cur.fetchone()
+
+    if not admin or not pwd_context.verify(payload.password, admin["password_hash"]):
+        # Log failed attempt (non-fatal)
+        try:
+            log_audit(conn, "admin_login_failed",
+                      admin_username=payload.username,
+                      detail="Incorrect username or password",
+                      ip_address=ip)
+        except Exception:
+            pass
+        raise HTTPException(status_code=401, detail="Incorrect username or password.")
+
+    token = create_token(
+        {
+            "role":      "admin",
+            "username":  admin["username"],
+            "full_name": admin["full_name"],
+            "user_role": admin["role"],          # "super_admin" or "ec_member"
+        },
+        expires_in_seconds=8 * 3600,
+    )
+
+    log_audit(conn, "admin_login",
+              admin_username=admin["username"],
+              detail=f"Role: {admin['role']}",
+              ip_address=ip)
+
+    return {
+        "status":    "success",
+        "token":     token,
+        "username":  admin["username"],
+        "full_name": admin["full_name"],
+        "user_role": admin["role"],
+    }
 
 
 @app.get("/api/admin/tally")
@@ -910,14 +1021,130 @@ def get_status(conn=Depends(get_db), _admin=Depends(require_admin)):
 
 
 @app.post("/api/admin/status")
-def update_status(payload: StatusUpdate, conn=Depends(get_db), _admin=Depends(require_admin)):
+def update_status(payload: StatusUpdate, request: Request, conn=Depends(get_db), admin=Depends(require_admin)):
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE System_Settings SET election_open = %s WHERE id = 1",
             (payload.election_open,),
         )
     conn.commit()
+
+    action = "election_opened" if payload.election_open else "election_closed"
+    log_audit(conn, action,
+              admin_username=admin.get("username", "unknown"),
+              ip_address=request.client.host if request.client else None)
+
     return {"status": "success", "election_open": payload.election_open}
+
+
+# ---------------------------------------------------------------------------
+# EC Member management  (super_admin only)
+# ---------------------------------------------------------------------------
+
+def require_super_admin(admin=Depends(require_admin)):
+    if admin.get("user_role") != "super_admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only super admins can manage EC member accounts."
+        )
+    return admin
+
+
+@app.get("/api/admin/users")
+def list_admin_users(conn=Depends(get_db), _admin=Depends(require_admin)):
+    """List all EC member accounts. Available to all admins."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT id, username, full_name, role, is_active, created_at "
+            "FROM Admin_Users ORDER BY created_at ASC"
+        )
+        users = cur.fetchall()
+    return {"status": "success", "users": [dict(u) for u in users]}
+
+
+@app.post("/api/admin/users")
+def create_admin_user(
+        payload: CreateAdminUserRequest,
+        request: Request,
+        conn=Depends(get_db),
+        admin=Depends(require_super_admin),
+):
+    """Create a new EC member account. Super admin only."""
+    if payload.role not in ("ec_member", "super_admin"):
+        raise HTTPException(status_code=400, detail="Role must be 'ec_member' or 'super_admin'.")
+
+    hashed = pwd_context.hash(payload.password)
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """INSERT INTO Admin_Users (username, password_hash, full_name, role)
+                   VALUES (%s, %s, %s, %s) RETURNING id""",
+                (payload.username.strip(), hashed, payload.full_name.strip(), payload.role)
+            )
+            new_id = cur.fetchone()["id"]
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        raise HTTPException(status_code=409, detail=f"Username '{payload.username}' already exists.")
+
+    log_audit(conn, "admin_user_created",
+              admin_username=admin["username"],
+              detail=f"Created {payload.role} '{payload.username}' ({payload.full_name})",
+              ip_address=request.client.host if request.client else None)
+
+    return {"status": "success", "id": new_id, "message": f"Account '{payload.username}' created."}
+
+
+@app.patch("/api/admin/users/{user_id}")
+def toggle_admin_user(
+        user_id: int,
+        request: Request,
+        conn=Depends(get_db),
+        admin=Depends(require_super_admin),
+):
+    """Activate or deactivate an EC member account. Super admin only.
+    A super_admin cannot deactivate their own account."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM Admin_Users WHERE id = %s", (user_id,))
+        target = cur.fetchone()
+
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if target["username"] == admin["username"]:
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own account.")
+
+    new_status = not target["is_active"]
+    with conn.cursor() as cur:
+        cur.execute("UPDATE Admin_Users SET is_active = %s WHERE id = %s", (new_status, user_id))
+    conn.commit()
+
+    action = "admin_user_activated" if new_status else "admin_user_deactivated"
+    log_audit(conn, action,
+              admin_username=admin["username"],
+              detail=f"User '{target['username']}' ({target['full_name']})",
+              ip_address=request.client.host if request.client else None)
+
+    return {
+        "status":    "success",
+        "is_active": new_status,
+        "message":   f"Account '{target['username']}' {'activated' if new_status else 'deactivated'}."
+    }
+
+
+# ---------------------------------------------------------------------------
+# Audit log viewer
+# ---------------------------------------------------------------------------
+
+@app.get("/api/admin/audit-log")
+def get_audit_log(conn=Depends(get_db), _admin=Depends(require_admin)):
+    """Return the last 200 audit log entries, newest first."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT id, admin_username, action, detail, ip_address, logged_at "
+            "FROM Audit_Log ORDER BY logged_at DESC LIMIT 200"
+        )
+        rows = cur.fetchall()
+    return {"status": "success", "log": [dict(r) for r in rows]}
 
 
 # ---------------------------------------------------------------------------
