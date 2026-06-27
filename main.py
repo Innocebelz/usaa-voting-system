@@ -331,8 +331,7 @@ def log_audit(
 # ---------------------------------------------------------------------------
 
 def _otp_html(otp_code: str, voter_name: str = "") -> str:
-    # TODO: replace with your real Cloudinary logo URL once uploaded
-    LOGO_URL = "https://res.cloudinary.com/REPLACE/image/upload/REPLACE/ussa_logo.png"
+    LOGO_URL = "https://res.cloudinary.com/dbdgbj4qz/image/upload/v1782139265/logo_ze2vq7.jpg"
 
     greeting = f"Hello <strong>{voter_name}</strong>," if voter_name else "Hello,"
 
