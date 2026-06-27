@@ -704,29 +704,10 @@ def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
             expires_in_seconds=30 * 60,  # 30 minutes to complete the ballot
         )
 
-    if has_voted:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                "SELECT * FROM Ballots WHERE matric_number = %s",
-                (payload.matric_number,)
-            )
-            ballot = cur.fetchone()
-
-        if ballot:
-            b = dict(ballot)
-            b.pop("matric_number", None)
-            response["userBallot"] = {
-                "President":                                   b.get("president"),
-                "Male Vice President":                         b.get("male_vice_president"),
-                "Female Vice President":                       b.get("female_vice_president"),
-                "Minister of Finance":                         b.get("minister_of_finance"),
-                "Minister of Education, Curriculars and Sports": b.get("minister_of_education"),
-                "Minister of Information and Publicity":       b.get("minister_of_information"),
-                "General Secretary":                           b.get("general_secretary"),
-            }
+    # REMOVED: The old database query attempting to fetch specific choices.
+    # Because ballots are now anonymous UUIDs, we simply return the response!
 
     return response
-
 
 # ---------------------------------------------------------------------------
 # Routes — Voting
