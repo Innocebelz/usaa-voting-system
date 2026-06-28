@@ -716,16 +716,19 @@ def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
     }
 
     if not has_voted:
-        # This token is the proof that OTP verification actually happened.
-        # POST /api/vote requires it, so a ballot can no longer be cast just
-        # by knowing/guessing a matric number.
+        # Proof that OTP verification actually happened.
+        # POST /api/vote requires this token — a ballot cannot be cast
+        # just by knowing or guessing a matric number.
         response["voteToken"] = create_token(
             {"matric_number": voter["matric_number"], "purpose": "vote"},
             expires_in_seconds=30 * 60,  # 30 minutes to complete the ballot
         )
 
-    # REMOVED: The old database query attempting to fetch specific choices.
-    # Because ballots are now anonymous UUIDs, we simply return the response!
+    # Ballot choices are no longer returned here.
+    # Since ballots are now anonymous UUIDs (no matric_number in the Ballots
+    # table), we cannot look up what a specific voter chose — by design.
+    # The frontend shows the user's choices from its own in-memory state
+    # set at the time of voting (stored in localStorage as userBallot).
 
     return response
 
