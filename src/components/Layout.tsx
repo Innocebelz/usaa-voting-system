@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import ElectionBot from './ElectionBot.tsx'; // <-- 1. Import the Bot
 
 const LOGO_URL = 'https://res.cloudinary.com/dbdgbj4qz/image/upload/v1782139265/logo_ze2vq7.jpg';
 
@@ -89,7 +90,7 @@ const Layout: React.FC = () => {
     };
 
     return (
-        <div className="min-h-screen bg-stone-50 font-sans flex flex-col overflow-hidden text-zinc-900">
+        <div className="min-h-screen bg-stone-50 font-sans flex flex-col overflow-hidden text-zinc-900 relative">
 
             {/* ── HEADER ───────────────────────────────────────────────── */}
             <header className="bg-zinc-900 text-white px-6 py-4 flex flex-col sm:flex-row justify-between items-center border-b-4 border-yellow-500 space-y-4 sm:space-y-0 relative z-10 w-full shrink-0">
@@ -148,7 +149,7 @@ const Layout: React.FC = () => {
             </div>
 
             {/* ── FOOTER ───────────────────────────────────────────────── */}
-            <footer className="bg-zinc-900 shrink-0 select-none border-t-2 border-yellow-500">
+            <footer className="bg-zinc-900 shrink-0 select-none border-t-2 border-yellow-500 relative z-10">
                 <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
 
                     <div className="text-[11px] font-semibold text-zinc-500 tracking-wide text-center sm:text-left">
@@ -183,6 +184,10 @@ const Layout: React.FC = () => {
                     </div>
                 </div>
             </footer>
+
+            {/* <-- 2. Render the bot globally above all routes --> */}
+            <ElectionBot />
+
         </div>
     );
 };

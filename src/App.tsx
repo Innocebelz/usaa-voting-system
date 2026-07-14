@@ -14,6 +14,7 @@ import Login from './views/Login';
 import Verify from './views/Verify';
 import VotingBooth from './views/VotingBooth';
 import Results from './views/Results';
+import ElectionBot from './components/ElectionBot'; // <-- 1. Import the Bot
 
 export default function App() {
   return (
@@ -52,6 +53,10 @@ export default function App() {
               <Route path="*" element={<Navigate to="/login" replace />} />
             </Route>
           </Routes>
+
+          {/* <-- 2. Render the bot globally above all routes --> */}
+          <ElectionBot />
+
         </Router>
       </AuthProvider>
   );

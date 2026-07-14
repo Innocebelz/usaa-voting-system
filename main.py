@@ -320,6 +320,9 @@ class CreateAdminUserRequest(BaseModel):
     full_name: str
     role:      str = "ec_member"   # "ec_member" or "super_admin"
 
+class ChatMessage(BaseModel):
+    message: str
+
 
 # ---------------------------------------------------------------------------
 # Audit log helper
@@ -361,12 +364,10 @@ def _otp_html(otp_code: str, voter_name: str = "") -> str:
                     border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;
                     background:#ffffff;">
 
-            <!-- Gold header bar -->
             <div style="background:#eab308;height:6px;width:100%;"></div>
 
             <div style="padding:32px 32px 24px;">
 
-                <!-- Logo + title -->
                 <div style="text-align:center;margin-bottom:28px;">
                     <img
                         src="{LOGO_URL}"
@@ -390,7 +391,6 @@ def _otp_html(otp_code: str, voter_name: str = "") -> str:
                     </p>
                 </div>
 
-                <!-- Greeting -->
                 <p style="color:#3f3f46;font-size:14px;margin:0 0 6px;">
                     {greeting}
                 </p>
@@ -399,7 +399,6 @@ def _otp_html(otp_code: str, voter_name: str = "") -> str:
                     <strong>U.S.S.A General Election</strong> is:
                 </p>
 
-                <!-- OTP box -->
                 <div style="background:#18181b;border-radius:12px;
                             padding:24px 16px;margin-bottom:24px;text-align:center;">
                     <p style="margin:0 0 8px;font-size:10px;font-weight:bold;
@@ -432,7 +431,6 @@ def _otp_html(otp_code: str, voter_name: str = "") -> str:
                 </p>
             </div>
 
-            <!-- Dark footer -->
             <div style="background:#18181b;padding:16px 32px;text-align:center;">
                 <p style="margin:0;color:#71717a;font-size:11px;">
                     © 2026 U.S.S.A Electoral Committee · Algeria
@@ -447,12 +445,10 @@ def _confirmation_html(voter_name: str, ballot_id: str) -> str:
         <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;
                     border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
 
-            <!-- Gold header bar -->
             <div style="background:#eab308;height:6px;width:100%;"></div>
 
             <div style="padding:32px 32px 24px;">
 
-                <!-- Logo / title -->
                 <div style="text-align:center;margin-bottom:24px;">
                     <h2 style="margin:0;color:#18181b;font-size:20px;
                                letter-spacing:1px;text-transform:uppercase;">
@@ -464,7 +460,6 @@ def _confirmation_html(voter_name: str, ballot_id: str) -> str:
                     </p>
                 </div>
 
-                <!-- Green confirmed badge -->
                 <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;
                             padding:12px 16px;margin-bottom:24px;text-align:center;">
                     <span style="color:#15803d;font-weight:bold;font-size:13px;">
@@ -482,7 +477,6 @@ def _confirmation_html(voter_name: str, ballot_id: str) -> str:
                     anyone, including the Electoral Commission.
                 </p>
 
-                <!-- Receipt box -->
                 <div style="background:#fafafa;border:2px solid #e4e4e7;border-radius:8px;
                             padding:16px;margin-bottom:24px;">
                     <p style="margin:0 0 6px;font-size:11px;font-weight:bold;
@@ -508,7 +502,6 @@ def _confirmation_html(voter_name: str, ballot_id: str) -> str:
                 </p>
             </div>
 
-            <!-- Dark footer -->
             <div style="background:#18181b;padding:16px 32px;text-align:center;">
                 <p style="margin:0;color:#71717a;font-size:11px;">
                     © 2026 U.S.S.A Electoral Committee · Algeria
@@ -1235,6 +1228,38 @@ def get_audit_log(conn=Depends(get_db), _admin=Depends(require_admin)):
         rows = cur.fetchall()
     return {"status": "success", "log": [dict(r) for r in rows]}
 
+# ---------------------------------------------------------------------------
+# Election Assistant Bot
+# ---------------------------------------------------------------------------
+
+@app.post("/api/chat")
+def chat_assistant(payload: ChatMessage):
+    msg = payload.message.lower()
+
+    # 1. OTP & Login Issues
+    if "otp" in msg or "code" in msg or "spam" in msg or "email" in msg:
+        reply = "If you haven't received your 6-digit OTP, please check your spam or junk folder. If it's still not there, wait 55 seconds and try requesting a new one!"
+
+    # 2. Results & Tally
+    elif "result" in msg or "tally" in msg or "winner" in msg or "close" in msg:
+        reply = "The election results are strictly confidential while voting is open. Once the Electoral Commission officially closes the polls, the final tally will automatically appear on the Results page."
+
+    # 3. Voting Rules (The 50% Rule & Unopposed)
+    elif "unopposed" in msg or "blank" in msg or "skip" in msg:
+        reply = "For unopposed candidates, you can leave the selection blank if you do not wish to vote for them (this counts as an abstention). Unopposed candidates must still secure 50% of the total vote to win."
+
+    # 4. Receipt & Verification
+    elif "verify" in msg or "receipt" in msg or "uuid" in msg:
+        reply = "After you vote, you receive a secure receipt code. Keep it safe! Once results are published, you can paste that code on the Results page to mathematically verify your vote was counted."
+
+    # 5. Default Fallback
+    else:
+        reply = "Hello! 🤖 I'm the U.S.S.A Election Assistant. I can help answer questions about getting your OTP, how to handle unopposed candidates, verifying your receipt, or when results will be published. How can I help?"
+
+    # Simulate a slight "typing" delay so it feels natural on the frontend
+    time.sleep(0.8)
+
+    return {"status": "success", "reply": reply}
 
 # ---------------------------------------------------------------------------
 # Entry point
