@@ -918,15 +918,15 @@ const AdminDashboard: React.FC = () => {
                                     <h3 className="text-sm font-black text-zinc-800 uppercase tracking-widest">How to Resolve Issues</h3>
                                     {[
                                         {
-                                            title: '🚨 Duplicate email (HIGH)',
+                                            title: ' Duplicate email (HIGH)',
                                             body:  'One person registered more than once with different matric numbers. Go to Supabase → Table Editor → Voters, find all rows with that email, and delete the fraudulent one. Keep the row where the matric number matches the student\'s real university ID.',
                                         },
                                         {
-                                            title: '⚠️ Duplicate name (MEDIUM)',
+                                            title: ' Duplicate name (MEDIUM)',
                                             body:  'Two registrations share the same full name. This may be two different students with the same name — cross-check their matric numbers and emails against university records. If it\'s the same person registered twice, delete the duplicate row.',
                                         },
                                         {
-                                            title: '✅ After resolving',
+                                            title: ' After resolving',
                                             body:  'Click "Run Check" again to confirm the issues are gone before opening the election. This check is also logged in the Audit Log so the EC has a record that it was performed.',
                                         },
                                     ].map(item => (

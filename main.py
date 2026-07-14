@@ -870,23 +870,18 @@ def pre_election_integrity_check(conn=Depends(get_db), admin=Depends(require_adm
     Runs a set of database integrity checks to catch registration fraud
     before the election opens. Returns flagged issues the EC should
     investigate. Safe to run multiple times.
-
-    Checks:
-      1. Duplicate emails — one email used for more than one matric number
-      2. Duplicate names — same full name appears on more than one matric number
-         (may be a coincidence but worth flagging)
-      3. Voters who have already voted (sanity check before opening)
-      4. Total voter count
     """
     issues = []
 
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
 
         # ── Check 1: Duplicate emails ──────────────────────────────────────
+        # FIX: Added LOWER(email) in the SELECT to strictly match the GROUP BY clause
         cur.execute("""
-                    SELECT email, COUNT(*) as count,
+                    SELECT LOWER(email) as email,
+                           COUNT(*) as count,
                    array_agg(matric_number ORDER BY matric_number) as matric_numbers,
-                   array_agg(name          ORDER BY matric_number) as names
+                   array_agg(name ORDER BY matric_number) as names
                     FROM Voters
                     GROUP BY LOWER(email)
                     HAVING COUNT(*) > 1
@@ -910,7 +905,7 @@ def pre_election_integrity_check(conn=Depends(get_db), admin=Depends(require_adm
                     SELECT LOWER(TRIM(name)) as norm_name,
                            COUNT(*) as count,
                    array_agg(matric_number ORDER BY matric_number) as matric_numbers,
-                   array_agg(email         ORDER BY matric_number) as emails
+                   array_agg(email ORDER BY matric_number) as emails
                     FROM Voters
                     GROUP BY LOWER(TRIM(name))
                     HAVING COUNT(*) > 1
@@ -936,7 +931,6 @@ def pre_election_integrity_check(conn=Depends(get_db), admin=Depends(require_adm
         voted = cur.fetchone()["voted"]
 
         # ── Check 4: Orphaned ballot UUIDs (ballots with no matching voter) ─
-        # Should always be zero after anonymisation — but good to verify
         cur.execute("SELECT COUNT(*) as ballot_count FROM Ballots")
         ballot_count = cur.fetchone()["ballot_count"]
 
@@ -953,7 +947,6 @@ def pre_election_integrity_check(conn=Depends(get_db), admin=Depends(require_adm
         "issues":       issues,
         "safe_to_open": len([i for i in issues if i["severity"] == "high"]) == 0,
     }
-
 
 @app.get("/api/public/results")
 def get_public_results(conn=Depends(get_db)):
