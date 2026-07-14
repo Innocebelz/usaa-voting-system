@@ -1236,23 +1236,28 @@ def get_audit_log(conn=Depends(get_db), _admin=Depends(require_admin)):
 def chat_assistant(payload: ChatMessage):
     msg = payload.message.lower()
 
-    # 1. OTP & Login Issues
-    if "otp" in msg or "code" in msg or "spam" in msg or "email" in msg:
+    # 1. ESCALATED OTP Issues (Check this FIRST!)
+    if ("otp" in msg or "code" in msg or "email" in msg or "spam" in msg) and \
+            ("still" in msg or "already" in msg or "can't" in msg or "cant" in msg or "tried" in msg or "nothing" in msg):
+        reply = "Since you have already checked your spam and requested a new code, there might be a typo in your registered email in the database. Please contact the Electoral Commission directly at electoralcommission231@gmail.com for manual verification."
+
+    # 2. Standard OTP & Login Issues
+    elif "otp" in msg or "code" in msg or "spam" in msg or "email" in msg:
         reply = "If you haven't received your 6-digit OTP, please check your spam or junk folder. If it's still not there, wait 55 seconds and try requesting a new one!"
 
-    # 2. Results & Tally
-    elif "result" in msg or "tally" in msg or "winner" in msg or "close" in msg:
-        reply = "The election results are strictly confidential while voting is open. Once the Electoral Commission officially closes the polls, the final tally will automatically appear on the Results page."
+    # 3. Results & Tally
+    elif "result" in msg or "tally" in msg or "winner" in msg or "close" in msg or "publish" in msg:
+        reply = "The election results are strictly confidential while voting is open. Once the Electoral Commission officially closes the polls, the final tally will automatically appear here: https://ussa-voting-system.vercel.app/election-results"
 
-    # 3. Voting Rules (The 50% Rule & Unopposed)
+    # 4. Voting Rules (The 50% Rule & Unopposed)
     elif "unopposed" in msg or "blank" in msg or "skip" in msg:
         reply = "For unopposed candidates, you can leave the selection blank if you do not wish to vote for them (this counts as an abstention). Unopposed candidates must still secure 50% of the total vote to win."
 
-    # 4. Receipt & Verification
+    # 5. Receipt & Verification
     elif "verify" in msg or "receipt" in msg or "uuid" in msg:
         reply = "After you vote, you receive a secure receipt code. Keep it safe! Once results are published, you can paste that code on the Results page to mathematically verify your vote was counted."
 
-    # 5. Default Fallback
+    # 6. Default Fallback
     else:
         reply = "Hello! 🤖 I'm the U.S.S.A Election Assistant. I can help answer questions about getting your OTP, how to handle unopposed candidates, verifying your receipt, or when results will be published. How can I help?"
 
