@@ -15,7 +15,7 @@ from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -321,7 +321,7 @@ class CreateAdminUserRequest(BaseModel):
     role:      str = "ec_member"   # "ec_member" or "super_admin"
 
 class ChatMessage(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=500)
 
 
 # ---------------------------------------------------------------------------
@@ -1234,7 +1234,7 @@ def get_audit_log(conn=Depends(get_db), _admin=Depends(require_admin)):
 
 @app.post("/api/chat")
 def chat_assistant(payload: ChatMessage):
-    msg = payload.message.lower()
+    msg = payload.message.strip().lower()
 
     # 1. ESCALATED OTP Issues (Check this FIRST!)
     if ("otp" in msg or "code" in msg or "email" in msg or "spam" in msg) and \
@@ -1260,9 +1260,6 @@ def chat_assistant(payload: ChatMessage):
     # 6. Default Fallback
     else:
         reply = "Hello! 🤖 I'm the U.S.S.A Election Assistant. I can help answer questions about getting your OTP, how to handle unopposed candidates, verifying your receipt, or when results will be published. How can I help?"
-
-    # Simulate a slight "typing" delay so it feels natural on the frontend
-    time.sleep(0.8)
 
     return {"status": "success", "reply": reply}
 
