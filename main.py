@@ -7,6 +7,7 @@ import base64
 import json
 import time
 import httpx
+import re
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
@@ -81,6 +82,20 @@ if not APP_SECRET_KEY:
           "Set APP_SECRET_KEY in your environment for production.")
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+
+
+def normalize_matric_number(matric_number: str) -> str:
+    """
+    Canonicalize USSA matric numbers so year-prefixed entries still match.
+
+    Examples:
+      20258UGA28109 -> 8UGA28109
+      25258UGA27961 -> 8UGA27961
+      8UGA28572     -> 8UGA28572
+    """
+    cleaned = re.sub(r"[\s\-_/]+", "", (matric_number or "").strip().upper())
+    match = re.search(r"8UGA[A-Z0-9]+$", cleaned)
+    return match.group(0) if match else cleaned
 
 
 def _b64encode(data: bytes) -> str:
@@ -603,8 +618,9 @@ def mask_email(email: str) -> str:
 
 @app.post("/api/request-otp")
 def request_otp(payload: OTPRequest, conn=Depends(get_db)):
+    matric_number = normalize_matric_number(payload.matric_number)
     now = time.time()
-    last_request = _last_otp_request_at.get(payload.matric_number)
+    last_request = _last_otp_request_at.get(matric_number)
     if last_request and (now - last_request) < OTP_RESEND_COOLDOWN_SECONDS:
         wait = int(OTP_RESEND_COOLDOWN_SECONDS - (now - last_request))
         raise HTTPException(
@@ -615,7 +631,7 @@ def request_otp(payload: OTPRequest, conn=Depends(get_db)):
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             "SELECT name, email FROM Voters WHERE matric_number = %s",
-            (payload.matric_number,)
+            (matric_number,)
         )
         voter = cur.fetchone()
 
@@ -630,11 +646,11 @@ def request_otp(payload: OTPRequest, conn=Depends(get_db)):
     with conn.cursor() as cur:
         cur.execute(
             "DELETE FROM OTP_Sessions WHERE matric_number = %s",
-            (payload.matric_number,)
+            (matric_number,)
         )
         cur.execute(
             "INSERT INTO OTP_Sessions (matric_number, otp_code, expires_at) VALUES (%s, %s, %s)",
-            (payload.matric_number, otp_code, expires_at),
+            (matric_number, otp_code, expires_at),
         )
     conn.commit()
 
@@ -642,8 +658,8 @@ def request_otp(payload: OTPRequest, conn=Depends(get_db)):
     send_otp_email(email, otp_code, voter_name)
 
     # Only mark the cooldown / reset attempts once the email actually sent.
-    _last_otp_request_at[payload.matric_number] = now
-    _otp_attempt_counts[payload.matric_number] = 0
+    _last_otp_request_at[matric_number] = now
+    _otp_attempt_counts[matric_number] = 0
 
     return {
         "status":  "success",
@@ -654,12 +670,13 @@ def request_otp(payload: OTPRequest, conn=Depends(get_db)):
 
 @app.post("/api/verify-otp")
 def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
-    attempts = _otp_attempt_counts.get(payload.matric_number, 0)
+    matric_number = normalize_matric_number(payload.matric_number)
+    attempts = _otp_attempt_counts.get(matric_number, 0)
     if attempts >= MAX_OTP_ATTEMPTS:
         with conn.cursor() as cur:
             cur.execute(
                 "DELETE FROM OTP_Sessions WHERE matric_number = %s",
-                (payload.matric_number,)
+                (matric_number,)
             )
         conn.commit()
         raise HTTPException(
@@ -670,19 +687,19 @@ def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             "SELECT expires_at FROM OTP_Sessions WHERE matric_number = %s AND otp_code = %s",
-            (payload.matric_number, payload.otp_code),
+            (matric_number, payload.otp_code),
         )
         session = cur.fetchone()
 
     if not session:
-        _otp_attempt_counts[payload.matric_number] = attempts + 1
+        _otp_attempt_counts[matric_number] = attempts + 1
         raise HTTPException(status_code=401, detail="Invalid OTP code.")
 
     if datetime.now() > session["expires_at"]:
         with conn.cursor() as cur:
             cur.execute(
                 "DELETE FROM OTP_Sessions WHERE matric_number = %s",
-                (payload.matric_number,)
+                (matric_number,)
             )
         conn.commit()
         raise HTTPException(status_code=401, detail="OTP code has expired.")
@@ -690,17 +707,17 @@ def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             "DELETE FROM OTP_Sessions WHERE matric_number = %s",
-            (payload.matric_number,)
+            (matric_number,)
         )
         cur.execute(
             "SELECT name, matric_number, has_voted FROM Voters WHERE matric_number = %s",
-            (payload.matric_number,),
+            (matric_number,),
         )
         voter = cur.fetchone()
 
     conn.commit()
 
-    _otp_attempt_counts.pop(payload.matric_number, None)
+    _otp_attempt_counts.pop(matric_number, None)
 
     has_voted = bool(voter["has_voted"])
     response = {
@@ -733,7 +750,8 @@ def verify_otp(payload: OTPVerify, conn=Depends(get_db)):
 
 @app.post("/api/vote")
 def cast_vote(payload: VotePayload, authorization: Optional[str] = Header(None), conn=Depends(get_db)):
-    require_vote_session(payload.matric_number, authorization)
+    matric_number = normalize_matric_number(payload.matric_number)
+    require_vote_session(matric_number, authorization)
 
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT election_open FROM System_Settings WHERE id = 1")
@@ -745,7 +763,7 @@ def cast_vote(payload: VotePayload, authorization: Optional[str] = Header(None),
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             "SELECT has_voted FROM Voters WHERE matric_number = %s",
-            (payload.matric_number,)
+            (matric_number,)
         )
         voter = cur.fetchone()
 
@@ -793,7 +811,7 @@ def cast_vote(payload: VotePayload, authorization: Optional[str] = Header(None),
             # to go from this record to the actual ballot choices.
             cur.execute(
                 "UPDATE Voters SET has_voted = TRUE WHERE matric_number = %s",
-                (payload.matric_number,),
+                (matric_number,),
             )
         conn.commit()
 
@@ -812,7 +830,7 @@ def cast_vote(payload: VotePayload, authorization: Optional[str] = Header(None),
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 "SELECT name, email FROM Voters WHERE matric_number = %s",
-                (payload.matric_number,)
+                (matric_number,)
             )
             voter_details = cur.fetchone()
 

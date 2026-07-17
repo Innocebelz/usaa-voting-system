@@ -2,6 +2,7 @@ import psycopg2
 import psycopg2.errors
 import csv
 import os
+import re
 from collections import defaultdict
 from dotenv import load_dotenv
 
@@ -15,6 +16,12 @@ COL_NAME   = "Full Name"
 COL_EMAIL  = "Email Address"
 COL_MATRIC = "Matriculation Number"
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def normalize_matric_number(matric_number: str) -> str:
+    cleaned = re.sub(r"[\s\-_/]+", "", (matric_number or "").strip().upper())
+    match = re.search(r"8UGA[A-Z0-9]+$", cleaned)
+    return match.group(0) if match else cleaned
 
 
 def import_voters():
@@ -49,8 +56,9 @@ def import_voters():
             for i, row in enumerate(reader, start=2):  # row 1 = header
                 name   = row.get(COL_NAME,   '').strip()
                 email  = row.get(COL_EMAIL,  '').strip().lower()
-                matric = row.get(COL_MATRIC, '').strip().upper()
-                all_rows.append((i, name, email, matric))
+                raw_matric = row.get(COL_MATRIC, '').strip().upper()
+                matric = normalize_matric_number(raw_matric)
+                all_rows.append((i, name, email, matric, raw_matric))
                 if matric:
                     matric_seen[matric].append(i)
                 if email:
@@ -113,7 +121,7 @@ def import_voters():
     skipped        = 0
     dup_email_rows = []
 
-    for row_num, name, email, matric in all_rows:
+    for row_num, name, email, matric, raw_matric in all_rows:
         if not matric:
             print(f"  REJECTED   row {row_num}: {name or '?'} — missing matric number")
             skipped += 1
@@ -124,6 +132,9 @@ def import_voters():
             continue
 
         try:
+            if raw_matric and raw_matric != matric:
+                print(f"  NORMALIZED row {row_num}: {raw_matric} → {matric}")
+
             # Check if this is a new or existing record
             cursor.execute("SELECT email FROM Voters WHERE matric_number = %s", (matric,))
             existing = cursor.fetchone()
