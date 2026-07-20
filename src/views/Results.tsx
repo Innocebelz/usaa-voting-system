@@ -295,7 +295,7 @@ const Results: React.FC = () => {
                       Your ballot choices are protected by anonymisation
                     </p>
                     <p className="text-xs text-zinc-400 font-medium leading-relaxed max-w-sm">
-                      Your ballot was recorded using a random anonymous ID — no link
+                      Your ballot was recorded using a random anonymous ID; No link
                       exists between your identity and your choices, even in the
                       database. Because of this, your specific selections cannot be
                       displayed when you log in again.
