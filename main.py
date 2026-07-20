@@ -1249,42 +1249,171 @@ def get_audit_log(conn=Depends(get_db), _admin=Depends(require_admin)):
 # ---------------------------------------------------------------------------
 # Election Assistant Bot
 # ---------------------------------------------------------------------------
-
 @app.post("/api/chat")
 def chat_assistant(payload: ChatMessage):
-    msg = payload.message.strip().lower()
+    """
+    Rule-based Election Assistant. Matches on keywords in priority order —
+    more specific / escalation-worthy patterns are checked first so they
+    aren't accidentally caught by a more generic rule below them.
+    """
+    msg = payload.message.lower().strip()
 
-    # 1. ESCALATED OTP Issues (Check this FIRST!)
-    if ("otp" in msg or "code" in msg or "email" in msg or "spam" in msg) and \
-            ("still" in msg or "already" in msg or "can't" in msg or "cant" in msg or "tried" in msg or "nothing" in msg):
-        reply = "Since you have already checked your spam and requested a new code, there might be a typo in your registered email in the database. Please contact the Electoral Commission directly at electoralcommissiom231@gmail.com for manual verification."
+    EC_EMAIL = "electoralcommissiom231@gmail.com"
 
-    # 2. Standard OTP & Login Issues
-    elif "otp" in msg or "code" in msg or "spam" in msg or "email" in msg:
-        reply = "If you haven't received your 6-digit OTP, please check your spam or junk folder. If it's still not there, wait 55 seconds and try requesting a new one!"
+    def contains_any(words):
+        return any(w in msg for w in words)
 
-    # 3. Results & Tally
-    elif "result" in msg or "tally" in msg or "winner" in msg or "close" in msg or "publish" in msg:
-        reply = "The election results are strictly confidential while voting is open. Once the Electoral Commission officially closes the polls, the final tally will automatically appear here: https://usaa-voting-system.vercel.app/election-results"
+    reply = None
 
-    # 4. Voting Rules (The 50% Rule & Unopposed)
-    elif "unopposed" in msg or "blank" in msg or "skip" in msg:
-        reply = "For unopposed candidates, you can leave the selection blank if you do not wish to vote for them (this counts as an abstention). Unopposed candidates must still secure 50% of the total vote to win."
+    # ── 1. ESCALATION: persistent OTP issues ────────────────────────────────
+    # Checked first so "still nothing after checking spam" doesn't just
+    # get the generic OTP answer again.
+    if contains_any(["otp", "code", "email", "spam"]) and \
+            contains_any(["still", "already", "can't", "cant", "tried", "nothing", "not working", "not received"]):
+        reply = (
+            f"Since you've already checked spam and tried resending, there may be a typo in your "
+            f"registered email address. Please contact the Electoral Commission directly at "
+            f"{EC_EMAIL} with your matriculation number so they can verify and correct it."
+        )
 
-    # 5. Receipt & Verification
-    elif "verify" in msg or "receipt" in msg or "uuid" in msg:
-        reply = "After you vote, you receive a secure receipt code. Keep it safe! Once results are published, you can paste that code on the Results page to mathematically verify your vote was counted."
+    # ── 2. Standard OTP / login help ────────────────────────────────────────
+    elif contains_any(["otp", "verification code", "code", "spam", "resend"]):
+        reply = (
+            "If you haven't received your 6-digit OTP, first check your spam or junk folder. "
+            "If it's not there, wait 55 seconds and tap 'Resend Code'. The code expires after "
+            "5 minutes, and you get up to 5 attempts to enter it correctly before needing a new one."
+        )
 
-    # 6. Default Fallback
+    # ── 3. Invalid / wrong OTP entered ──────────────────────────────────────
+    elif contains_any(["invalid", "wrong code", "incorrect code", "doesn't work", "does not work"]) and "otp" in msg or \
+            contains_any(["invalid otp", "wrong otp", "incorrect otp"]):
+        reply = (
+            "Make sure you're entering the MOST RECENT code — if you requested more than one, "
+            "only the last one is valid. Double-check all 6 digits. If it's been more than 5 "
+            "minutes since you received it, it has expired — tap 'Resend Code' for a fresh one."
+        )
+
+    # ── 4. Matric number not found / login issues ───────────────────────────
+    elif contains_any(["matric", "matriculation", "not found", "doesn't recognize", "not registered"]):
+        reply = (
+            "If your matriculation number isn't being recognized, double-check for typos — it's "
+            "not case-sensitive but spacing matters (e.g. no extra spaces before/after). If you're "
+            "sure it's correct and it still says 'not found', you may not be on the registered "
+            f"voter list yet. Contact the Electoral Commission at {EC_EMAIL} to confirm your registration."
+        )
+
+    # ── 5. Already voted (potential integrity concern — take seriously) ────
+    elif contains_any(["already voted", "already cast", "says i voted", "haven't voted", "havent voted"]):
+        reply = (
+            "If the system says you've already voted but you're certain you haven't, this needs "
+            f"immediate attention. Please contact the Electoral Commission at {EC_EMAIL} right away "
+            "with your matriculation number. Every vote is logged with a timestamp, so the EC can "
+            "investigate exactly what happened."
+        )
+
+    # ── 6. Anonymity / privacy concerns ──────────────────────────────────────
+    elif contains_any(["anonymous", "anonymity", "privacy", "who i voted", "see my vote", "trace my vote", "linked to me"]):
+        reply = (
+            "Your vote is fully anonymous. When you vote, your ballot is stored with a random, "
+            "unique code — not your matriculation number. There is no record anywhere in the system "
+            "that links your identity to your specific choices, so nobody — not the Electoral "
+            "Commission, can see who you voted for."
+        )
+
+    # ── 7. Ballot receipt / verification ──────────────────────────────────────
+    elif contains_any(["receipt", "verify", "uuid", "confirm my vote", "was my vote counted", "counted"]):
+        reply = (
+            "After voting, you receive a unique receipt code (a long string like "
+            "'c8a428a8-aba5-...'). Once the Electoral Commission closes the election, go to the "
+            "public results page and paste that code into the 'Verify Your Ballot' box. It will "
+            "confirm whether your ballot was counted — without revealing your actual choices. "
+            "Keep your receipt code safe (screenshot it) right after you vote, since it's only "
+            "shown once."
+        )
+
+    # ── 8. Results, tally, winners ──────────────────────────────────────────
+    elif contains_any(["result", "tally", "winner", "close", "publish", "when will", "announce"]):
+        reply = (
+            "Results are strictly confidential while voting is open — this protects the election "
+            "from being influenced mid-vote. Once the Electoral Commission officially closes the "
+            "polls, the full tally, turnout, and winners for all 7 positions automatically appear at: "
+            "https://ussa-voting-system.vercel.app/election-results — no login needed to view it."
+        )
+
+    # ── 9. Unopposed candidates / abstention / blank votes ──────────────────
+    elif contains_any(["unopposed", "blank", "skip", "abstain", "abstention", "one candidate"]):
+        reply = (
+            "For any position, you can leave your selection blank if you don't wish to vote for a "
+            "particular candidate — this counts as an abstention, not an error. Note that even an "
+            "unopposed candidate must still secure enough of the vote to be confirmed, based on the "
+            "Electoral Commission's rules for that position."
+        )
+
+    # ── 10. Session expired / logged out ────────────────────────────────────
+    elif contains_any(["session expired", "logged out", "signed out", "keeps logging", "session ended"]):
+        reply = (
+            "Voter sessions automatically expire after 12 hours for security — this protects your "
+            "vote if you ever leave your phone unattended. Simply log in again with your "
+            "matriculation number and you'll get a fresh OTP code."
+        )
+
+    # ── 11. Changing / editing a submitted vote ─────────────────────────────
+    elif contains_any(["change my vote", "edit my vote", "made a mistake", "wrong candidate", "undo"]):
+        reply = (
+            "Once you confirm and submit your ballot, it cannot be changed or undone — this is by "
+            "design, to protect the integrity of the election. Before you submit, a confirmation "
+            "screen shows all 7 of your selections so you can review them carefully first. Take "
+            "your time on that screen before tapping 'Yes, Submit My Ballot'."
+        )
+
+    # ── 12. Voting from abroad / outside Algeria ────────────────────────────
+    elif contains_any(["abroad", "outside algeria", "travel", "different country", "from home"]):
+        reply = (
+            "Yes, you can vote from anywhere in the world as long as you have internet access and "
+            "can receive your OTP code at your registered email address."
+        )
+
+    # ── 13. Page errors / technical issues ──────────────────────────────────
+    elif contains_any(["error", "not loading", "won't load", "wont load", "broken", "crash", "stuck", "frozen"]):
+        reply = (
+            "Sorry you're running into that. Try: (1) refreshing the page, (2) checking your "
+            "internet connection, (3) trying a different browser like Chrome or Safari. The system "
+            "can take 30-60 seconds to wake up if it's the first visit of the day. If the problem "
+            f"continues, contact the Electoral Commission at {EC_EMAIL}."
+        )
+
+    # ── 14. EC / admin dashboard questions ──────────────────────────────────
+    elif contains_any(["ec dashboard", "admin dashboard", "electoral commission access", "how do i open", "how do i close"]):
+        reply = (
+            "That's a question for an Electoral Commission member with dashboard access, not for "
+            f"voters here. If you're an EC member needing help, please reach out at {EC_EMAIL}."
+        )
+
+    # ── 15. Greeting / small talk ────────────────────────────────────────────
+    elif contains_any(["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]) and len(msg) < 25:
+        reply = (
+            "Hello! 👋 I'm the U.S.S.A Election Assistant. Ask me about OTP codes, unopposed "
+            "candidates, ballot verification, or when results will be published — or use one of "
+            "the quick action buttons above."
+        )
+
+    # ── 16. Thanks / closing ─────────────────────────────────────────────────
+    elif contains_any(["thank", "thanks", "appreciate", "cheers"]):
+        reply = "You're welcome! Good luck with your vote — every ballot matters. 🗳️"
+
+    # ── 17. Default fallback ──────────────────────────────────────────────────
     else:
-        reply = "Hello! 🤖 I'm the U.S.A.A Election Assistant. I can help answer questions about getting your OTP, how to handle unopposed candidates, verifying your receipt, or when results will be published. How can I help?"
+        reply = (
+            "I'm the U.S.A.A Election Assistant 🤖. I can help with: getting your OTP, unopposed "
+            "candidates, verifying your ballot receipt, when results are published, and general "
+            "voting questions. Could you rephrase your question, or try one of the quick action "
+            f"buttons above? For anything I can't help with, reach the EC at {EC_EMAIL}."
+        )
+
+    # Simulate a slight "typing" delay so it feels natural on the frontend
+    time.sleep(0.8)
 
     return {"status": "success", "reply": reply}
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
